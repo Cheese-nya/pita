@@ -3,6 +3,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 src-tauri/target/
+src-tauri/pita-hook/target/
 src-tauri/binaries/
 src-tauri/gen/schemas/
 

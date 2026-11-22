@@ -41,6 +41,8 @@ jobs:
       - name: Rust clippy & unit/integration tests
         run: |
           npm run build:sidecar
+          cargo clippy --manifest-path src-tauri/pita-hook/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/pita-hook/Cargo.toml
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml
 

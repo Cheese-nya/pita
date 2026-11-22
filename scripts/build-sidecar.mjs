@@ -9,6 +9,7 @@ const rootDir = path.resolve(
   "..",
 );
 const tauriDir = path.join(rootDir, "src-tauri");
+const hookDir = path.join(tauriDir, "pita-hook");
 
 // Accept optional --target <triple> or Tauri's TAURI_ENV_TARGET_TRIPLE (for cross-compile CI)
 let explicitTarget = process.env.TAURI_ENV_TARGET_TRIPLE || "";
@@ -32,21 +33,11 @@ const targetTriple = explicitTarget || detectHostTriple();
 const isWindows = targetTriple.includes("windows");
 const exeSuffix = isWindows ? ".exe" : "";
 
-const outDir = path.join(tauriDir, "binaries");
-fs.mkdirSync(outDir, { recursive: true });
-const sidecarDest = path.join(outDir, `pita-hook-${targetTriple}${exeSuffix}`);
-// Create placeholder on clean checkout so tauri_build::build() validates externalBin before copying real binary
-if (!fs.existsSync(sidecarDest)) {
-  fs.writeFileSync(sidecarDest, "");
-}
-
 const cargoArgs = [
   "build",
   "--manifest-path",
-  path.join(tauriDir, "Cargo.toml"),
+  path.join(hookDir, "Cargo.toml"),
   "--release",
-  "--bin",
-  "pita-hook",
 ];
 if (explicitTarget) {
   cargoArgs.push("--target", explicitTarget);
@@ -56,18 +47,21 @@ execFileSync("cargo", cargoArgs, { stdio: "inherit", cwd: rootDir });
 
 const builtBin = explicitTarget
   ? path.join(
-      tauriDir,
+      hookDir,
       "target",
       explicitTarget,
       "release",
       `pita-hook${exeSuffix}`,
     )
-  : path.join(tauriDir, "target", "release", `pita-hook${exeSuffix}`);
+  : path.join(hookDir, "target", "release", `pita-hook${exeSuffix}`);
 
 if (!fs.existsSync(builtBin)) {
   throw new Error(`Expected pita-hook binary not found at ${builtBin}`);
 }
 
+const outDir = path.join(tauriDir, "binaries");
+fs.mkdirSync(outDir, { recursive: true });
+const sidecarDest = path.join(outDir, `pita-hook-${targetTriple}${exeSuffix}`);
 fs.copyFileSync(builtBin, sidecarDest);
 if (!isWindows) {
   fs.chmodSync(sidecarDest, 0o755);

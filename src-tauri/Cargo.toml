@@ -15,10 +15,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "pita"
 path = "src/main.rs"
 
-[[bin]]
-name = "pita-hook"
-path = "src/bin/pita_hook.rs"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

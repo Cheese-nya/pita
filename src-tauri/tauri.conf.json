@@ -28,6 +28,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Cross-Agent AI Skills Manager",
     "externalBin": ["binaries/pita-hook"],
     "icon": [
       "icons/32x32.png",

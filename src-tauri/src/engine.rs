@@ -2690,7 +2690,8 @@ mod tests {
         // then Machine B (fresh empty Pita root) cloning that bare repo and restoring byte-for-byte!
         let tmp = tempfile::tempdir().unwrap();
         let bare_dir = tmp.path().join("remote-backup.git");
-        git2::Repository::init_bare(&bare_dir).unwrap();
+        let bare = git2::Repository::init_bare(&bare_dir).unwrap();
+        bare.set_head("refs/heads/main").unwrap();
 
         // --- Machine A ---
         let root_a = tmp.path().join("machine-a-pita");

@@ -1,0 +1,56 @@
+{
+  "name": "pita",
+  "version": "0.1.0",
+  "description": "Pita — Cross-Agent Skills Manager (Windows, macOS, Linux)",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/Cheese-nya/pita#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cheese-nya/pita.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cheese-nya/pita/issues"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-select": "^2.4.1",
+    "@radix-ui/react-tabs": "^1.2.1",
+    "@tauri-apps/api": "^2.12.5",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@tauri-apps/plugin-opener": "^2.7.3",
+    "diff": "^9.0.0",
+    "fflate": "^0.8.3",
+    "i18next": "^27.2.2",
+    "lucide-react": "^1.77.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-i18next": "^18.0.3",
+    "react-markdown": "^10.1.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@tauri-apps/cli": "^2.12.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "prettier": "^3.10.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

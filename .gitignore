@@ -1,0 +1,22 @@
+# Dependencies & Build Outputs
+node_modules/
+dist/
+*.tsbuildinfo
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/schemas/
+
+# Local private docs, PRDs, and agent/editor state (never push to public repo)
+skills-manager-prd.md
+*-prd.md
+*PRD*.md
+UI-HANDOFF.md
+.claude/
+.ecc/
+
+# OS & Env
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*

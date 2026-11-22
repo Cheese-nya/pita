@@ -1,0 +1,26 @@
+name: New Agent Support Request
+description: Request support for another AI coding Agent or custom skills directory
+title: "[Agent]: "
+labels: ["enhancement", "agent-adapter"]
+body:
+  - type: input
+    id: agent_name
+    attributes:
+      label: Agent Name & Website
+      placeholder: "e.g., Cline / Roo Code (https://...)"
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Global & Project Skills Directories
+      placeholder: |
+        Global: ~/.my-agent/skills
+        Project: .my-agent/skills
+    validations:
+      required: true
+  - type: textarea
+    id: disable_mechanism
+    attributes:
+      label: Official Disable / Exclude Config (if any)
+      description: Link to official docs if the Agent supports disabling individual skills via a config file.

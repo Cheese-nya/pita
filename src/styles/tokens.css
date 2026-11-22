@@ -1,0 +1,251 @@
+:root {
+  /* ==========================================================================
+     Pita Design System — Core Scale (Linear / Vercel Tight Architectural)
+     ========================================================================== */
+
+  /* Spacing scale (4px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Typography scale */
+  --fs-note: 11px;
+  --fs-sub: 13px;
+  --fs-body: 14px;
+  --fs-name: 15px;
+  --fs-title: 20px;
+
+  /* Tight border-radius ladder:
+     - 10px (--radius-l): Modals
+     -  8px (--radius-m): All page-level surfaces (metrics, table, cards, panels, groups, menus, toasts)
+     -  6px (--radius-s): Controls, inputs, buttons, sidebar items, filters, chips, wells, icon boxes
+     -  4px (--radius-xs): Badges, agent deployment tiles, code tags, counters, kbd
+     - 50% (--radius-round): Strictly circular nodes (token avatar, status dots, empty radio ring) */
+  --radius-xs: 4px;
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 10px;
+  --radius-round: 50%;
+
+  /* Layout & row rhythm */
+  --sidebar: 230px;
+  --row-sidebar: 32px;
+  --row-skill: 44px;
+  --control-h-s: 28px;
+  --control-h-m: 32px;
+  --control-h-l: 34px;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+
+  /* Typefaces */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI",
+             -apple-system, "SF Pro Text",
+             "PingFang SC", "Microsoft YaHei", Inter, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+}
+
+/* ============================================================================
+   Light Theme — Matte Neutral Paper
+   ============================================================================ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Matte surface elevation ladder */
+  --rail: #F1F1F3;
+  --topbar: #FFFFFF;
+  --bg: #F7F7F8;
+  --surface: #FFFFFF;
+  --surface-subtle: #F4F4F6;
+  --surface-raised: #FFFFFF;
+
+  /* Scoped nested-layer defaults (remapped inside .modal / .drawer) */
+  --local-surface: #FFFFFF;
+  --local-well: #F4F4F6;
+  --local-control: #FFFFFF;
+  --local-control-hover: #F5F5F7;
+  --local-control-active: #ECECF0;
+  --local-input: #FFFFFF;
+
+  /* Overlay-scoped nested layer tokens (.modal & .drawer) */
+  --overlay-surface: #FAFAFC;
+  --overlay-well: #F2F2F5;
+  --overlay-control: #FFFFFF;
+  --overlay-control-hover: #F5F5F7;
+  --overlay-control-active: #EAEAEF;
+  --overlay-input: #FFFFFF;
+  --diff-bg: #FFFFFF;
+  --diff-head: #F4F4F6;
+
+  /* Flat matte selection fills (no glass overlays or bevels) */
+  --nav-active: #E6E6EB;
+  --chip-active-bg: #ECECF0;
+  --metric-active-bg: #FAFAFC;
+
+  /* Hover / pressed overlays & scrims */
+  --hover: rgba(0, 0, 0, 0.04);
+  --active: rgba(0, 0, 0, 0.075);
+  --scrim: rgba(15, 15, 18, 0.28);
+  --scrim-drawer: rgba(15, 15, 18, 0.14);
+
+  /* Crisp 3-tier matte borders */
+  --border-subtle: #ECECF0;
+  --border: #E2E2E7;
+  --border-strong: #CECED6;
+  --border-hover: #B2B2BE;
+  --border-focus: #18181B;
+  --focus-ring: rgba(24, 24, 27, 0.12);
+
+  /* Ink hierarchy (WCAG AA+) */
+  --text-1: #18181B;
+  --text-2: #56565E;
+  --text-3: #666672;
+
+  /* Primary monochrome accent */
+  --accent: #18181B;
+  --accent-hover: #2C2C32;
+  --accent-soft: #ECECF0;
+  --accent-ink: #18181B;
+  --on-accent: #FFFFFF;
+  --primary-disabled-bg: #DCDCE2;
+  --primary-disabled-fg: #767680;
+  --bar-start: #434349;
+  --bar-end: #18181B;
+
+  /* Agent indicator dot tints */
+  --dot-claude: #C27858;
+  --dot-codex: #7C8999;
+  --dot-antigravity: #877FB3;
+
+  /* Semantic status palette */
+  --ok: #2FA672;
+  --ok-text: #166B45;
+  --ok-soft: #EDF8F2;
+  --ok-border: #C4E6D5;
+
+  --warn: #D69E2E;
+  --warn-text: #8A5B08;
+  --warn-soft: #FCF6E8;
+  --warn-border: #EAD5A3;
+
+  --danger: #E04F47;
+  --danger-text: #B92B24;
+  --danger-bg: #B92B24;
+  --danger-bg-hover: #9F231D;
+  --danger-soft: #FDF0EF;
+  --danger-border: #F1C5C2;
+  --on-danger: #FFFFFF;
+
+  /* Clean shadows (floating layers & whisper-subtle controls only, zero bevels) */
+  --shadow-card: none;
+  --shadow-control: 0 1px 1px rgba(0, 0, 0, 0.035);
+  --shadow-primary: none;
+  --shadow-inset: none;
+  --shadow-raised: 0 12px 30px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-drawer: -8px 0 24px rgba(0, 0, 0, 0.07);
+}
+
+/* ============================================================================
+   Dark Theme — Pure Matte Obsidian Graphite
+   ============================================================================ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Monotonic matte surface elevation ladder */
+  --rail: #111114;
+  --topbar: #111114;
+  --bg: #0C0C0E;
+  --surface: #141417;
+  --surface-subtle: #101013;
+  --surface-raised: #18181C;
+
+  /* Scoped nested-layer defaults (remapped inside .modal / .drawer) */
+  --local-surface: #141417;
+  --local-well: #101013;
+  --local-control: #1E1E24;
+  --local-control-hover: #26262E;
+  --local-control-active: #2E2E38;
+  --local-input: #101013;
+
+  /* Overlay-scoped nested layer tokens (.modal & .drawer) */
+  --overlay-surface: #1E1E24;
+  --overlay-well: #121216;
+  --overlay-control: #25252C;
+  --overlay-control-hover: #2E2E37;
+  --overlay-control-active: #363641;
+  --overlay-input: #121216;
+  --diff-bg: #111115;
+  --diff-head: #19191F;
+
+  /* Flat matte selection fills (no glass overlays or bevels) */
+  --nav-active: #202026;
+  --chip-active-bg: #222229;
+  --metric-active-bg: #19191E;
+
+  /* Hover / pressed overlays & scrims */
+  --hover: rgba(255, 255, 255, 0.045);
+  --active: rgba(255, 255, 255, 0.08);
+  --scrim: rgba(0, 0, 0, 0.60);
+  --scrim-drawer: rgba(0, 0, 0, 0.34);
+
+  /* Crisp 3-tier matte borders (no frosted white rims) */
+  --border-subtle: #1F1F25;
+  --border: #26262E;
+  --border-strong: #353540;
+  --border-hover: #484857;
+  --border-focus: #E4E4EA;
+  --focus-ring: rgba(228, 228, 234, 0.14);
+
+  /* Ink hierarchy (WCAG AA+) */
+  --text-1: #F2F2F5;
+  --text-2: #A2A2AD;
+  --text-3: #91919D;
+
+  /* Primary monochrome accent */
+  --accent: #EFEFF2;
+  --accent-hover: #FFFFFF;
+  --accent-soft: #222229;
+  --accent-ink: #F2F2F5;
+  --on-accent: #0E0E11;
+  --primary-disabled-bg: #24242B;
+  --primary-disabled-fg: #6A6A76;
+  --bar-start: #9A9AA4;
+  --bar-end: #EBEBF0;
+
+  /* Agent indicator dot tints */
+  --dot-claude: #D48766;
+  --dot-codex: #8A98AA;
+  --dot-antigravity: #9B93C7;
+
+  /* Semantic status palette */
+  --ok: #46C48B;
+  --ok-text: #5AD49D;
+  --ok-soft: #13251D;
+  --ok-border: #214635;
+
+  --warn: #E5B54A;
+  --warn-text: #F0C562;
+  --warn-soft: #262013;
+  --warn-border: #483A1C;
+
+  --danger: #F0645C;
+  --danger-text: #F77B74;
+  --danger-bg: #C53029;
+  --danger-bg-hover: #D33A32;
+  --danger-soft: #281616;
+  --danger-border: #4E2726;
+  --on-danger: #FFFFFF;
+
+  /* Clean shadows (floating layers only, zero bevel highlights) */
+  --shadow-card: none;
+  --shadow-control: none;
+  --shadow-primary: none;
+  --shadow-inset: none;
+  --shadow-raised: 0 18px 44px rgba(0, 0, 0, 0.56);
+  --shadow-drawer: -12px 0 36px rgba(0, 0, 0, 0.50);
+}

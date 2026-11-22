@@ -1,0 +1,142 @@
+name: CI & Cross-Platform Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Lint, Test & Typecheck
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies & build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Rust clippy & unit/integration tests
+        run: |
+          npm run build:sidecar
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+  prepare-release:
+    name: Prepare Draft Release
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure release exists before parallel uploads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VER=$(node -p "require('./package.json').version")
+            TAG="v${VER}"
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --draft \
+              --title "Pita ${TAG}" \
+              --notes-file CHANGELOG.md
+          fi
+
+  build-desktop:
+    name: Build (${{ matrix.label }})
+    needs: prepare-release
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64 (.exe / .msi)
+            platform: windows-latest
+            sidecar_args: ""
+            tauri_args: ""
+          - label: macOS Apple Silicon (.dmg)
+            platform: macos-latest
+            sidecar_args: "--target aarch64-apple-darwin"
+            tauri_args: "--target aarch64-apple-darwin --bundles dmg"
+          - label: macOS Intel (.dmg)
+            platform: macos-latest
+            sidecar_args: "--target x86_64-apple-darwin"
+            tauri_args: "--target x86_64-apple-darwin --bundles dmg"
+          - label: Linux x64 (.deb)
+            platform: ubuntu-22.04
+            sidecar_args: ""
+            tauri_args: "--bundles deb"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build & stage native pita-hook sidecar
+        run: node scripts/build-sidecar.mjs ${{ matrix.sidecar_args }}
+
+      - name: Build Tauri application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "Pita v__VERSION__"
+          releaseBody: |
+            Pita — Cross-Agent Skills Manager (Windows + macOS + Linux).
+
+            > Note: Builds are currently unsigned. On first launch:
+            > - **Windows**: Click "More info" → "Run anyway" in SmartScreen.
+            > - **macOS**: Right-click `Pita.app` → "Open", or allow in System Settings → Privacy & Security.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.tauri_args }}

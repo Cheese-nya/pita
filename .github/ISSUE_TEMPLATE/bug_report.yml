@@ -1,0 +1,46 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Pita
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows 11 / 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Ubuntu / Debian / Arch / Other)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Pita Version
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Pita and go to ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (Settings → Workspace → Open logs folder)
+      description: Logs in ~/.pita/logs/pita.log are automatically redacted, but please double-check before pasting.
+      render: text

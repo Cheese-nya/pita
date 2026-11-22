@@ -1,0 +1,56 @@
+[package]
+name = "pita"
+version = "0.1.0"
+description = "Pita — Cross-Agent Skills Manager"
+authors = ["Pita Contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.78"
+
+[lib]
+name = "pita_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pita"
+path = "src/main.rs"
+
+[[bin]]
+name = "pita-hook"
+path = "src/bin/pita_hook.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
+toml_edit = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+walkdir = "2"
+dirs = "5"
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+url = "2"
+similar = "2"
+
+[target.'cfg(not(windows))'.dependencies]
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+
+[dev-dependencies]
+tempfile = "3"

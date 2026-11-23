@@ -39,6 +39,87 @@ pub fn default_global_paths(agent: &AgentId) -> &'static [&'static str] {
     }
 }
 
+/// A configured skills directory, application installation or CLI can establish availability.
+/// The shared ~/.agents/skills directory alone does not establish that Codex is installed.
+pub fn agent_is_present(agent: &AgentId, ctx: &RuntimeContext) -> bool {
+    if matches!(agent, AgentId::Custom(_)) {
+        return true;
+    }
+    let dirs = global_skill_dirs(agent, ctx);
+    if ctx.custom_paths.contains_key(agent) {
+        return dirs.iter().any(|path| path.is_dir());
+    }
+    let (commands, app): (&[&str], Option<&str>) = match agent {
+        AgentId::ClaudeCode => (&["claude"], Some("Claude")),
+        AgentId::Codex => (&["codex"], Some("Codex")),
+        AgentId::Antigravity => (&["antigravity", "agy"], Some("Antigravity")),
+        AgentId::Trae => (&["trae", "trae-cn"], Some("Trae")),
+        AgentId::Hermes => (&["hermes"], None),
+        AgentId::Pi => (&["pi"], None),
+        AgentId::OpenClaw => (&["openclaw"], None),
+        AgentId::Qoder => (&["qoder"], Some("Qoder")),
+        AgentId::Workbuddy => (&["workbuddy", "codebuddy"], Some("WorkBuddy")),
+        AgentId::T3Code => (&["t3code", "t3-code"], Some("T3 Code")),
+        AgentId::GeminiCli => (&["gemini"], None),
+        AgentId::Opencode => (&["opencode"], Some("OpenCode")),
+        AgentId::Windsurf => (&["windsurf"], Some("Windsurf")),
+        AgentId::CodexCli => (&["codex"], None),
+        AgentId::ClaudeCli => (&["claude"], None),
+        AgentId::AntigravityCli => (&["agy"], None),
+        AgentId::Custom(_) => return false,
+    };
+    if dirs.iter().enumerate().any(|(index, dir)| {
+        !(index == 1 && matches!(agent, AgentId::Codex)) && dir.parent().is_some_and(Path::is_dir)
+    }) {
+        return true;
+    }
+    let home = dirs::home_dir();
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    if std::env::split_paths(&paths)
+        .chain(home.iter().map(|dir| dir.join(".local/bin")))
+        .any(|dir| {
+            commands.iter().any(|name| {
+                dir.join(name).is_file()
+                    || (cfg!(windows)
+                        && ["exe", "cmd", "bat"]
+                            .iter()
+                            .any(|ext| dir.join(name).with_extension(ext).is_file()))
+            })
+        })
+    {
+        return true;
+    }
+    app.is_some_and(|name| {
+        let bundle = format!("{}.app", name);
+        (cfg!(target_os = "macos")
+            && (Path::new("/Applications").join(&bundle).is_dir()
+                || home
+                    .iter()
+                    .any(|dir| dir.join("Applications").join(&bundle).is_dir())))
+            || (cfg!(windows)
+                && ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"]
+                    .iter()
+                    .filter_map(std::env::var_os)
+                    .map(PathBuf::from)
+                    .any(|dir| dir.join(name).is_dir() || dir.join("Programs").join(name).is_dir()))
+            || (cfg!(target_os = "linux")
+                && [
+                    "/usr/share/applications",
+                    "/var/lib/flatpak/exports/share/applications",
+                ]
+                .iter()
+                .map(PathBuf::from)
+                .chain(home.iter().map(|dir| dir.join(".local/share/applications")))
+                .any(|dir| {
+                    dir.join(format!(
+                        "{}.desktop",
+                        name.to_ascii_lowercase().replace(' ', "-")
+                    ))
+                    .is_file()
+                }))
+    })
+}
+
 pub fn project_dot_dir(agent: &AgentId) -> &'static str {
     match agent {
         AgentId::ClaudeCode => ".claude",
@@ -529,5 +610,36 @@ mod tests {
             fs::read_to_string(claude_dir.join("settings.local.json")).unwrap(),
             broken
         );
+    }
+
+    #[test]
+    fn custom_agent_is_present_without_existing_dir_while_builtin_custom_path_requires_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_custom = dir.path().join("my-tool/skills");
+        let missing_antigravity = dir.path().join("antigravity/skills");
+        let custom_agent = AgentId::Custom("my-tool".into());
+
+        let ctx = RuntimeContext {
+            enabled_agents: vec![custom_agent.clone(), AgentId::Antigravity],
+            custom_paths: std::collections::HashMap::from([(
+                AgentId::Antigravity,
+                missing_antigravity.to_string_lossy().into(),
+            )]),
+            custom_harnesses: vec![crate::domain::CustomHarnessConfig {
+                id: custom_agent.clone(),
+                name: "My Tool".into(),
+                path: missing_custom.to_string_lossy().into(),
+                project_dir: ".my-tool".into(),
+            }],
+        };
+
+        assert!(agent_is_present(&custom_agent, &ctx));
+        assert!(!agent_is_present(&AgentId::Antigravity, &ctx));
+
+        let mut ctx_with_custom_override = ctx.clone();
+        ctx_with_custom_override
+            .custom_paths
+            .insert(custom_agent.clone(), missing_custom.to_string_lossy().into());
+        assert!(agent_is_present(&custom_agent, &ctx_with_custom_override));
     }
 }

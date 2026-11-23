@@ -11,7 +11,7 @@ import type {
   PitaClient,
   UsageSummary,
 } from "./pitaClient";
-import { getSettings } from "./settings";
+import { ALL_AGENT_IDS, getSettings } from "./settings";
 import { encode } from "./tree";
 import { translateDescriptionAsync } from "./translator";
 
@@ -31,6 +31,19 @@ function runtimeContext() {
 
 export class TauriPitaClient implements PitaClient {
   private lastWorkspace?: Workspace;
+
+  detectInstalledAgents(): Promise<AgentId[]> {
+    const ctx = runtimeContext();
+    return invoke<AgentId[]>("detect_installed_agents", {
+      ctx: {
+        ...ctx,
+        enabledAgents: [
+          ...ALL_AGENT_IDS,
+          ...ctx.customHarnesses.map((h) => h.id),
+        ],
+      },
+    });
+  }
 
   async load(): Promise<Workspace> {
     const ws = await invoke<Workspace>("workspace_load", {
@@ -56,37 +69,8 @@ export class TauriPitaClient implements PitaClient {
           skill.name,
           skill.description,
         );
+        if (!res.text) throw Error("translationUnavailable");
         commandToRun = { type: "translateSkill", id: c.id, text: res.text };
-      }
-    } else if (c.type === "translateAllSkills") {
-      const settings = getSettings();
-      if (
-        settings.translationEngine === "custom" &&
-        settings.customApiUrl.trim() &&
-        settings.customApiKey.trim()
-      ) {
-        let ws = this.lastWorkspace ?? (await this.load());
-        const targets = c.ids?.length
-          ? ws.skills.filter((s) => c.ids!.includes(s.id))
-          : ws.skills;
-        for (const skill of targets) {
-          if (!skill.descriptionZh?.trim()) {
-            const res = await translateDescriptionAsync(
-              skill.name,
-              skill.description,
-            );
-            ws = await invoke<Workspace>("workspace_execute", {
-              command: {
-                type: "translateSkill",
-                id: skill.id,
-                text: res.text,
-              },
-              ctx: runtimeContext(),
-            });
-          }
-        }
-        this.lastWorkspace = ws;
-        return ws;
       }
     }
 

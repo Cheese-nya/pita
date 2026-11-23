@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Activity,
@@ -6,7 +6,9 @@ import {
   Cpu,
   Gauge,
   Grid2x2,
+  ExternalLink,
   HardDrive,
+  ImagePlus,
   Languages,
   LayoutList,
   Monitor,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import { AgentIcon, TabBar, Modal } from "../components/ui";
 import { Picker } from "../components/FilePicker";
+import { TranslateSkillsButton } from "../components/TranslateSkillsButton";
 import { usePita, useWorkspace } from "../store";
 import {
   isNativeRuntime,
@@ -26,7 +29,7 @@ import {
   type AppUpdateInfo,
   type UsageSummary,
 } from "../services/pitaClient";
-import type { AgentId } from "../types/domain";
+import type { AgentId, CustomAgentId } from "../types/domain";
 import type { DetectedProject } from "../services/archive";
 import { getAgentMeta, globalTarget } from "../types/workspace";
 import {
@@ -36,6 +39,10 @@ import {
   type SortKey,
   type ThemeMode,
 } from "../services/settings";
+import {
+  HARNESS_ICON_ACCEPT,
+  processHarnessIconFile,
+} from "../services/harnessIcon";
 import {
   testTranslationEndpoint,
   useTranslatePref,
@@ -167,7 +174,7 @@ type SettingsTab =
   | "usage"
   | "workspace";
 
-const BUDGET_PRESETS = [300, 500, 1000, 2000];
+const BUDGET_PRESETS = [10_000, 20_000, 512_000, 1_000_000];
 
 export function Settings({ close }: { close: () => void }) {
   const { t } = useTranslation();
@@ -176,8 +183,12 @@ export function Settings({ close }: { close: () => void }) {
   const notify = usePita((s) => s.notify);
   const resetDemo = usePita((s) => s.resetDemo);
   const busy = usePita((s) => s.busy);
+  const installedAgents = usePita((s) => s.installedAgents);
 
   const settings = useSettings();
+  const [budgetDraft, setBudgetDraft] = useState(
+    String(settings.tokenBudgetLimit),
+  );
   const [showZh, setShowZh] = useTranslatePref();
   const [section, setSection] = useState<SettingsTab>("agents");
   const [path, setPath] = useState(w.root);
@@ -199,10 +210,18 @@ export function Settings({ close }: { close: () => void }) {
   const [harnessPath, setHarnessPath] = useState("");
   const [harnessProjDir, setHarnessProjDir] = useState("");
   const [harnessColor, setHarnessColor] = useState(CUSTOM_HARNESS_COLORS[0]);
+  const [harnessIcon, setHarnessIcon] = useState("");
+  const [harnessIconError, setHarnessIconError] = useState("");
+  const addIconInputRef = useRef<HTMLInputElement | null>(null);
+  const editIconInputRef = useRef<HTMLInputElement | null>(null);
+  const editingIconIdRef = useRef<CustomAgentId | null>(null);
 
   useEffect(() => {
     pitaClient.appVersion().then(setAppVer).catch(() => {});
   }, []);
+  useEffect(() => {
+    setBudgetDraft(String(settings.tokenBudgetLimit));
+  }, [settings.tokenBudgetLimit]);
 
   useEffect(() => {
     if (section !== "usage") return;
@@ -260,7 +279,7 @@ export function Settings({ close }: { close: () => void }) {
                 <p className="settings-help">{t("settingsAgentsHelp")}</p>
                 <button
                   type="button"
-                  className="ml-auto"
+                  className="ml-auto nowrap-btn"
                   onClick={() => setShowAddHarness((v) => !v)}
                 >
                   <Plus size={14} aria-hidden="true" />
@@ -316,6 +335,84 @@ export function Settings({ close }: { close: () => void }) {
                       />
                     ))}
                   </div>
+                  <div className="custom-harness-icon-row">
+                    <small>{t("customHarnessIcon")}</small>
+                    <input
+                      ref={addIconInputRef}
+                      type="file"
+                      accept={HARNESS_ICON_ACCEPT}
+                      hidden
+                      onChange={async (e) => {
+                        const file = e.currentTarget.files?.[0];
+                        e.currentTarget.value = "";
+                        if (!file) return;
+                        setHarnessIconError("");
+                        try {
+                          const dataUrl = await processHarnessIconFile(file);
+                          setHarnessIcon(dataUrl);
+                        } catch {
+                          setHarnessIconError("customHarnessIconError");
+                        }
+                      }}
+                    />
+                    <span className="custom-harness-icon-preview">
+                      {harnessIcon ? (
+                        <img
+                          className="agent-mark agent-custom-img"
+                          src={harnessIcon}
+                          width={24}
+                          height={24}
+                          alt=""
+                        />
+                      ) : (
+                        <span
+                          className="agent-mark agent-custom-mark"
+                          aria-hidden="true"
+                          style={{
+                            width: 24,
+                            height: 24,
+                            fontSize: 12,
+                            backgroundColor: harnessColor,
+                          }}
+                        >
+                          {(harnessName.trim() || "CH")
+                            .slice(0, 2)
+                            .toUpperCase()}
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="nowrap-btn"
+                      onClick={() => addIconInputRef.current?.click()}
+                    >
+                      <ImagePlus size={14} aria-hidden="true" />
+                      {t(
+                        harnessIcon
+                          ? "customHarnessChangeIcon"
+                          : "customHarnessUploadIcon",
+                      )}
+                    </button>
+                    {harnessIcon && (
+                      <button
+                        type="button"
+                        className="nowrap-btn"
+                        onClick={() => {
+                          setHarnessIcon("");
+                          setHarnessIconError("");
+                        }}
+                      >
+                        <RotateCcw size={13} aria-hidden="true" />
+                        {t("customHarnessClearIcon")}
+                      </button>
+                    )}
+                  </div>
+                  <small>{t("customHarnessIconHint")}</small>
+                  {harnessIconError && (
+                    <small className="warning" role="alert">
+                      {t(harnessIconError)}
+                    </small>
+                  )}
                   <div className="line">
                     <button
                       type="button"
@@ -327,11 +424,14 @@ export function Settings({ close }: { close: () => void }) {
                           path: harnessPath,
                           projectDir: harnessProjDir,
                           color: harnessColor,
+                          icon: harnessIcon || undefined,
                         });
                         if (created) {
                           setHarnessName("");
                           setHarnessPath("");
                           setHarnessProjDir("");
+                          setHarnessIcon("");
+                          setHarnessIconError("");
                           setShowAddHarness(false);
                           notify({
                             key: "customHarnessAdded",
@@ -348,7 +448,11 @@ export function Settings({ close }: { close: () => void }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setShowAddHarness(false)}
+                      onClick={() => {
+                        setHarnessIcon("");
+                        setHarnessIconError("");
+                        setShowAddHarness(false);
+                      }}
                     >
                       {t("cancel")}
                     </button>
@@ -356,12 +460,44 @@ export function Settings({ close }: { close: () => void }) {
                 </div>
               )}
 
+              <input
+                ref={editIconInputRef}
+                type="file"
+                accept={HARNESS_ICON_ACCEPT}
+                hidden
+                onChange={async (e) => {
+                  const file = e.currentTarget.files?.[0];
+                  e.currentTarget.value = "";
+                  const targetId = editingIconIdRef.current;
+                  editingIconIdRef.current = null;
+                  if (!file || !targetId) return;
+                  try {
+                    const icon = await processHarnessIconFile(file);
+                    settings.updateCustomHarness(targetId, { icon });
+                  } catch {
+                    notify({
+                      key: "customHarnessIconError",
+                      detail: "",
+                      error: true,
+                      undo: false,
+                    });
+                  }
+                }}
+              />
+
               <div className="settings-agent-list">
                 {settings.agentOrder.map((id) => {
                   const enabled = settings.enabledAgents.includes(id);
                   const isLast =
                     enabled && settings.enabledAgents.length <= 1;
                   const isCustom = isCustomAgentId(id);
+                  const customHarness = isCustom
+                    ? settings.customHarnesses.find((h) => h.id === id)
+                    : undefined;
+                  const detected =
+                    !isCustom && installedAgents
+                      ? installedAgents.includes(id)
+                      : false;
                   const meta = getAgentMeta(id);
                   const customVal = settings.customPaths[id] ?? "";
                   return (
@@ -391,23 +527,54 @@ export function Settings({ close }: { close: () => void }) {
                           )}
                         </label>
                         <div className="line">
-                          <span className="settings-mech-chip">
-                            {t(
-                              meta.nativeDisable
-                                ? "agentMechanismNative"
-                                : "agentMechanismStaging",
-                            )}
-                          </span>
-                          {isCustom && (
-                            <button
-                              type="button"
-                              className="text-btn compact-link"
-                              title={t("customHarnessRemove")}
-                              aria-label={t("customHarnessRemove")}
-                              onClick={() => settings.removeCustomHarness(id)}
+                          {!isCustom && installedAgents && (
+                            <span
+                              className={
+                                "audit-pill " + (detected ? "safe" : "neutral")
+                              }
                             >
-                              <Trash2 size={13} />
-                            </button>
+                              {t(detected ? "agentDetected" : "agentNotDetected")}
+                            </span>
+                          )}
+                          {isCustom && (
+                            <>
+                              <button
+                                type="button"
+                                className="text-btn compact-link"
+                                title={t("customHarnessChangeIcon")}
+                                aria-label={`${t(id)} · ${t("customHarnessChangeIcon")}`}
+                                onClick={() => {
+                                  editingIconIdRef.current = id;
+                                  editIconInputRef.current?.click();
+                                }}
+                              >
+                                <ImagePlus size={13} />
+                              </button>
+                              {customHarness?.icon && (
+                                <button
+                                  type="button"
+                                  className="text-btn compact-link"
+                                  title={t("customHarnessClearIcon")}
+                                  aria-label={`${t(id)} · ${t("customHarnessClearIcon")}`}
+                                  onClick={() =>
+                                    settings.updateCustomHarness(id, {
+                                      icon: null,
+                                    })
+                                  }
+                                >
+                                  <RotateCcw size={12} />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="text-btn compact-link"
+                                title={t("customHarnessRemove")}
+                                aria-label={t("customHarnessRemove")}
+                                onClick={() => settings.removeCustomHarness(id)}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -652,16 +819,7 @@ export function Settings({ close }: { close: () => void }) {
               )}
 
               <div className="settings-action-row">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    run({ type: "translateAllSkills" }, "translatedAllReceipt")
-                  }
-                >
-                  <Languages size={14} aria-hidden="true" />
-                  {t("translateAllBtn")}
-                </button>
+                <TranslateSkillsButton skills={w.skills} />
               </div>
             </div>
           )}
@@ -703,15 +861,21 @@ export function Settings({ close }: { close: () => void }) {
                   <input
                     type="number"
                     min={50}
-                    max={20000}
+                    max={2_000_000}
                     step={50}
                     disabled={!settings.tokenBudgetEnabled}
-                    value={settings.tokenBudgetLimit}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (Number.isFinite(n) && n >= 50) {
+                    value={budgetDraft}
+                    onChange={(e) => setBudgetDraft(e.target.value)}
+                    onBlur={() => {
+                      const n = Number(budgetDraft);
+                      if (Number.isFinite(n) && n >= 50 && n <= 2_000_000) {
                         settings.setTokenBudget(true, n);
+                      } else {
+                        setBudgetDraft(String(settings.tokenBudgetLimit));
                       }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
                     }}
                   />
                   <span className="mono">tok</span>
@@ -1017,6 +1181,32 @@ export function Settings({ close }: { close: () => void }) {
                     </button>
                   )}
                 </div>
+                <div className="api-test-row settings-about-links">
+                  {[
+                    [
+                      "reportBug",
+                      "https://github.com/Cheese-nya/pita/issues/new",
+                    ],
+                    ["GitHub", "https://github.com/Cheese-nya/pita"],
+                    ["personalWebsite", "https://saiaino.xyz"],
+                  ].map(([label, url]) => (
+                    <a
+                      key={url}
+                      className="button"
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => {
+                        if (pitaClient.openUrl) {
+                          e.preventDefault();
+                          void pitaClient.openUrl(url);
+                        }
+                      }}
+                    >
+                      {t(label)} <ExternalLink size={12} />
+                    </a>
+                  ))}
+                </div>
                 {updateInfo && (
                   <small className={updateInfo.error ? "warning" : undefined}>
                     {updateInfo.error
@@ -1049,8 +1239,11 @@ export function Settings({ close }: { close: () => void }) {
                   <BookOpen size={15} />
                   {t("guide")}
                 </summary>
-                <p>{t("guideWin")}</p>
-                <p>{t("guideMac")}</p>
+                <ol className="settings-guide">
+                  <li>{t("guideAddSkills")}</li>
+                  <li>{t("guideManageCopies")}</li>
+                  <li>{t("guideSyncSkills")}</li>
+                </ol>
               </details>
 
               {!isNativeRuntime() && (

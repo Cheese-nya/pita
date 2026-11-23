@@ -17,10 +17,10 @@ import {
   type Workspace,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
-import { AgentIcon } from "./ui";
+import { AddAgentButton, AgentIcon } from "./ui";
 
 interface NodeLayout {
-  id: AgentId;
+  id: AgentId | null;
   x: number;
   y: number;
   ring: 0 | 1;
@@ -32,13 +32,14 @@ function computeWheelLayout(ids: AgentId[]): {
   outerR: number;
   dualRing: boolean;
 } {
-  const n = ids.length;
-  if (n <= 8) {
-    const r = 108;
+  const slots = [...ids, null];
+  const n = slots.length;
+  if (ids.length <= 8) {
+    const r = n > 8 ? 118 : 108;
     const spread = Math.min(156, Math.max(92, (n - 1) * 23));
     const startDeg = -spread / 2;
     const step = n > 1 ? spread / (n - 1) : 0;
-    const nodes: NodeLayout[] = ids.map((id, i) => {
+    const nodes: NodeLayout[] = slots.map((id, i) => {
       const rad = ((startDeg + i * step) * Math.PI) / 180;
       return {
         id,
@@ -53,8 +54,8 @@ function computeWheelLayout(ids: AgentId[]): {
 
   // Concentric dual-ring for 9–18+ agents
   const innerCount = Math.min(6, Math.max(5, Math.ceil(ids.length * 0.42)));
-  const innerIds = ids.slice(0, innerCount);
-  const outerIds = ids.slice(innerCount);
+  const innerIds = slots.slice(0, innerCount);
+  const outerIds = slots.slice(innerCount);
   const innerR = 78;
   const outerR = ids.length > 12 ? 138 : 128;
 
@@ -96,11 +97,13 @@ export function AgentRadialWheel({
   agentIds,
   activeAgent,
   onSelect,
+  onAddAgent,
 }: {
   w: Workspace;
   agentIds: AgentId[];
   activeAgent?: AgentId;
   onSelect: (id: AgentId) => void;
+  onAddAgent: () => void;
 }) {
   const { t } = useTranslation();
   const customPaths = useSettings((s) => s.customPaths);
@@ -272,7 +275,7 @@ export function AgentRadialWheel({
 
   useEffect(() => () => cancelTimers(), [cancelTimers]);
 
-  const focusedId = hoveredId ?? activeAgent ?? agentIds[0];
+  const focusedId = hoveredId;
   const focusedStats = focusedId ? statsMap.get(focusedId) : undefined;
   const focusedPath = focusedId
     ? agentPaths(focusedId, customPaths)[0]
@@ -381,12 +384,13 @@ export function AgentRadialWheel({
             </svg>
 
             {layout.nodes.map((node) => {
-              const st = statsMap.get(node.id);
-              const isActive = activeAgent === node.id;
-              const isFocused = focusedId === node.id;
+              const id = node.id;
+              const st = id ? statsMap.get(id) : undefined;
+              const isActive = activeAgent === id;
+              const isFocused = focusedId === id;
               return (
                 <div
-                  key={node.id}
+                  key={id ?? "add-agent"}
                   className="radial-node-slot"
                   style={
                     {
@@ -398,39 +402,54 @@ export function AgentRadialWheel({
                     } as CSSProperties
                   }
                 >
-                  <button
-                    ref={(el) => {
-                      nodeRefs.current[node.index] = el;
-                    }}
-                    type="button"
-                    className={
-                      "radial-node" +
-                      (isActive ? " current" : "") +
-                      (isFocused ? " focused" : "") +
-                      (st?.overBudget ? " over-budget" : "")
-                    }
-                    aria-label={
-                      t(node.id) +
-                      " · " +
-                      t("agentTotalTokens", {
-                        n: (st?.tokens ?? 0).toLocaleString(),
-                        count: st?.count ?? 0,
-                      })
-                    }
-                    onPointerEnter={() => setHoveredId(node.id)}
-                    onFocus={() => setHoveredId(node.id)}
-                    onClick={() => {
-                      closeImmediately(false);
-                      onSelect(node.id);
-                    }}
-                  >
-                    <span className="radial-node-orb" aria-hidden="true">
-                      <AgentIcon id={node.id} size={20} />
-                      {st?.overBudget && (
-                        <i className="radial-budget-dot" aria-hidden="true" />
-                      )}
-                    </span>
-                  </button>
+                  {id ? (
+                    <button
+                      ref={(el) => {
+                        nodeRefs.current[node.index] = el;
+                      }}
+                      type="button"
+                      className={
+                        "radial-node" +
+                        (isActive ? " current" : "") +
+                        (isFocused ? " focused" : "") +
+                        (st?.overBudget ? " over-budget" : "")
+                      }
+                      aria-label={
+                        t(id) +
+                        " · " +
+                        t("agentTotalTokens", {
+                          n: (st?.tokens ?? 0).toLocaleString(),
+                          count: st?.count ?? 0,
+                        })
+                      }
+                      onPointerEnter={() => setHoveredId(id)}
+                      onFocus={() => setHoveredId(id)}
+                      onClick={() => {
+                        closeImmediately(false);
+                        onSelect(id);
+                      }}
+                    >
+                      <span className="radial-node-orb" aria-hidden="true">
+                        <AgentIcon id={id} size={20} />
+                        {st?.overBudget && (
+                          <i className="radial-budget-dot" aria-hidden="true" />
+                        )}
+                      </span>
+                    </button>
+                  ) : (
+                    <AddAgentButton
+                      appearance="radial"
+                      ref={(el) => {
+                        nodeRefs.current[node.index] = el;
+                      }}
+                      onPointerEnter={() => setHoveredId(null)}
+                      onFocus={() => setHoveredId(null)}
+                      onClick={() => {
+                        closeImmediately(true);
+                        onAddAgent();
+                      }}
+                    />
+                  )}
                 </div>
               );
             })}

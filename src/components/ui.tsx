@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -32,11 +32,13 @@ import {
   ArrowUpRight,
   CheckCircle2,
   AlertCircle,
+  Ellipsis,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { createTwoFilesPatch } from "diff";
 import { usePita } from "../store";
 import { useSettings } from "../services/settings";
+import { githubAvatarUrl } from "../services/marketplace";
 import { changedFiles, unpack } from "../services/tree";
 import type { AgentId, DeploymentStatus } from "../types/domain";
 import { type Skill, type Files } from "../types/workspace";
@@ -59,10 +61,95 @@ const icons = {
 };
 export function SkillIcon({ skill }: { skill: Skill }) {
   const Icon = icons[skill.glyph as keyof typeof icons] ?? Box;
+  const avatar =
+    skill.source.type === "git"
+      ? githubAvatarUrl(skill.source.repoUrl)
+      : undefined;
   return (
     <span className={"skill-icon glyph-" + skill.glyph}>
-      <Icon size={16} />
+      {avatar ? (
+        <SkillAvatar key={avatar} url={avatar} fallback={<Icon size={16} />} />
+      ) : (
+        <Icon size={16} />
+      )}
     </span>
+  );
+}
+export function SkillAvatar({
+  url,
+  fallback,
+}: {
+  url: string;
+  fallback: ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+  return failed ? (
+    fallback
+  ) : (
+    <img
+      className="skill-avatar-img"
+      src={url}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+export function AddAgentButton({
+  appearance,
+  ...props
+}: Omit<ComponentProps<"button">, "children"> & {
+  appearance: "dock" | "radial" | "ring";
+}) {
+  const { t } = useTranslation();
+  const label = t("addAgent");
+  const icon = <Ellipsis size={18} aria-hidden="true" />;
+  return (
+    <button
+      {...props}
+      type="button"
+      className={
+        "agent-add-button " +
+        (appearance === "dock" ? "token-logo" : `${appearance}-node`)
+      }
+      aria-haspopup="dialog"
+      aria-label={label}
+      title={label}
+    >
+      {appearance === "dock" ? (
+        icon
+      ) : (
+        <span className={`${appearance}-node-orb`}>{icon}</span>
+      )}
+    </button>
+  );
+}
+export function CustomAgentImage({
+  id,
+  src,
+  size,
+  fallback,
+}: {
+  id: AgentId;
+  src: string;
+  size: number;
+  fallback: ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+  return failed ? (
+    fallback
+  ) : (
+    <img
+      className="agent-mark agent-custom-img"
+      data-agent={id}
+      src={src}
+      alt=""
+      width={size}
+      height={size}
+      draggable={false}
+      onError={() => setFailed(true)}
+    />
   );
 }
 export function AgentIcon({ id, size = 16 }: { id: AgentId; size?: number }) {
@@ -71,7 +158,7 @@ export function AgentIcon({ id, size = 16 }: { id: AgentId; size?: number }) {
     const h = customHarnesses.find((item) => item.id === id);
     const label = (h?.name || id.slice(7)).trim();
     const initials = label.slice(0, 2).toUpperCase();
-    return (
+    const fallback = (
       <span
         className="agent-mark agent-custom-mark"
         aria-hidden="true"
@@ -84,6 +171,27 @@ export function AgentIcon({ id, size = 16 }: { id: AgentId; size?: number }) {
       >
         {initials}
       </span>
+    );
+    if (h?.icon) {
+      return (
+        <CustomAgentImage
+          key={h.icon}
+          id={id}
+          src={h.icon}
+          size={size}
+          fallback={fallback}
+        />
+      );
+    }
+    return fallback;
+  }
+  if (id === "pi") {
+    return (
+      <span
+        className="agent-mark agent-pi-mark"
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      />
     );
   }
   const ext =
@@ -175,6 +283,7 @@ export function AgentBadge({
   onClick,
   label,
   disabled,
+  unavailable = false,
 }: {
   agent: AgentId;
   status: DeploymentStatus | "absent";
@@ -182,6 +291,7 @@ export function AgentBadge({
   onClick: () => void;
   label: string;
   disabled?: boolean;
+  unavailable?: boolean;
 }) {
   const Mark = drifted
     ? TriangleAlert
@@ -200,15 +310,17 @@ export function AgentBadge({
       aria-label={label}
       title={label}
       aria-pressed={status === "enabled"}
-      disabled={disabled}
+      disabled={disabled || unavailable}
       onClick={onClick}
     >
       <AgentIcon id={agent} size={16} />
-      <Mark
-        className={"agent-state" + (drifted ? " drift-mark" : "")}
-        size={10}
-        aria-hidden="true"
-      />
+      {!unavailable && (
+        <Mark
+          className={"agent-state" + (drifted ? " drift-mark" : "")}
+          size={10}
+          aria-hidden="true"
+        />
+      )}
     </button>
   );
 }
@@ -490,12 +602,14 @@ export function ReceiptToast() {
   );
 }
 export function timestamp(iso: string, lang: string) {
+  const date = new Date(iso);
+  if (!iso || !Number.isFinite(date.valueOf())) return "—";
   return new Intl.DateTimeFormat(lang, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(iso));
+  }).format(date);
 }
 export function sourceName(s: Skill, t: (k: string) => string) {
   return s.source.type === "git"

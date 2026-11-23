@@ -36,6 +36,8 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::workspace_load,
+            commands::detect_installed_agents,
+            commands::marketplace_feed,
             commands::workspace_execute,
             commands::workspace_undo,
             commands::inspect_git,
@@ -61,6 +63,7 @@ pub fn run() {
             commands::usage_enable_hook,
             commands::usage_disable_hook,
             commands::translate_proxy,
+            commands::translate_description,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pita desktop application");

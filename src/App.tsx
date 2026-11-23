@@ -54,6 +54,8 @@ export function App() {
     { w, load, run, busy, loadError } = usePita();
   const enabledAgents = useSettings((s) => s.enabledAgents);
   const customPaths = useSettings((s) => s.customPaths);
+  const customHarnesses = useSettings((s) => s.customHarnesses);
+  const detectAgents = usePita((s) => s.detectAgents);
   const themeMode = useSettings((s) => s.themeMode);
   const setThemeMode = useSettings((s) => s.setThemeMode);
   const agentDrawerOpen = useSettings((s) => s.agentDrawerOpen);
@@ -76,7 +78,7 @@ export function App() {
     [selection, select] = useState<{ id: string; tab: string }>(),
     [nav, showNav] = useState(false),
     [collapsed, setCollapsed] = useState(
-      () => preference("sidebar", "expanded") === "collapsed",
+      () => preference("sidebar", "collapsed") === "collapsed",
     ),
     [narrow, setNarrow] = useState(
       () => matchMedia("(max-width:780px)").matches,
@@ -88,6 +90,7 @@ export function App() {
         : next,
     );
   }, []);
+  const openAddAgent = useCallback(() => setDialog("settings"), []);
   const sidebar = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const animTimer = useRef<number>(0);
@@ -122,7 +125,7 @@ export function App() {
       setSidebarPhase(nextCollapsed ? "collapsing" : "expanding");
     }
     setCollapsed(nextCollapsed);
-    remember("sidebar", nextCollapsed ? "expanded" : "collapsed");
+    remember("sidebar", nextCollapsed ? "collapsed" : "expanded");
   }
   useLayoutEffect(() => {
     if (sidebarPhase === "idle") {
@@ -201,6 +204,11 @@ export function App() {
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    void detectAgents();
+    window.addEventListener("focus", detectAgents);
+    return () => window.removeEventListener("focus", detectAgents);
+  }, [detectAgents, enabledAgents, customPaths, customHarnesses, w?.scannedAt]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => setSystemDark(media.matches);
@@ -370,6 +378,7 @@ export function App() {
                   agentIds={enabledAgents}
                   activeAgent={agent}
                   onSelect={(a) => goto(a)}
+                  onAddAgent={openAddAgent}
                 />
               ) : (
                 <div
@@ -683,6 +692,7 @@ export function App() {
                 activeSkillId={selection?.id}
                 onVisibleIdsChange={handleVisibleIdsChange}
                 onNavigate={goto}
+                onAddAgent={openAddAgent}
                 add={() => {
                   setInstallOrigin(
                     target ? { target, returnPage: page } : null,
@@ -697,6 +707,7 @@ export function App() {
       {selection && skill && (
         <Detail
           s={skill}
+          target={target}
           initial={selection.tab}
           skillIds={visibleIds}
           onNavigate={open}

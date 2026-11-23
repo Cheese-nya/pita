@@ -487,6 +487,13 @@ pub struct ReuseRef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SkillTranslation {
+    pub id: String,
+    pub description: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum Command {
     #[serde(rename = "deploy")]
@@ -517,8 +524,8 @@ pub enum Command {
     Source { id: String, url: String },
     #[serde(rename = "translateSkill")]
     TranslateSkill { id: String, text: Option<String> },
-    #[serde(rename = "translateAllSkills")]
-    TranslateAllSkills { ids: Option<Vec<String>> },
+    #[serde(rename = "saveTranslations")]
+    SaveTranslations { entries: Vec<SkillTranslation> },
     #[serde(rename = "drift")]
     Drift {
         id: String,
@@ -579,6 +586,12 @@ pub enum Command {
         skills: Vec<Skill>,
         targets: Vec<ScopeTarget>,
         reuse: Option<Vec<ReuseRef>>,
+    },
+    #[serde(rename = "repairMarketplace")]
+    RepairMarketplace {
+        skill: Box<Skill>,
+        hash: String,
+        targets: Vec<ScopeTarget>,
     },
     #[serde(rename = "restore")]
     Restore { data: RestoreData },

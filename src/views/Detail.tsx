@@ -38,6 +38,7 @@ import {
   agentEnabledTokens,
   agentNativeConfigKey,
   copies,
+  estimateTokens,
   stagedDisable,
   globalTarget,
   location,
@@ -50,7 +51,8 @@ import {
   available,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
-import { gitUrl } from "../services/tree";
+import type { AgentId, ScopeTarget } from "../types/domain";
+import { gitUrl, unpack } from "../services/tree";
 import { pitaClient, type UsageSummary } from "../services/pitaClient";
 import {
   resolveSkillDescription,
@@ -58,12 +60,14 @@ import {
 } from "../services/translator";
 export function Detail({
   s,
+  target,
   initial,
   close,
   skillIds,
   onNavigate,
 }: {
   s: Skill;
+  target?: ScopeTarget;
   initial: string;
   close: () => void;
   skillIds?: string[];
@@ -74,18 +78,72 @@ export function Detail({
     run = usePita((v) => v.run),
     notify = usePita((v) => v.notify),
     enabledAgents = useSettings((v) => v.enabledAgents),
+    translationEngine = useSettings((v) => v.translationEngine),
     descInfo = resolveSkillDescription(s, true),
     [tab, setTab] = useState(initial),
     [del, setDel] = useState(false),
+    [removeTarget, setRemoveTarget] = useState<{
+      scope: ScopeTarget;
+      agent?: AgentId;
+    }>(),
     [creatingPreset, setCreatingPreset] = useState(false),
     [editingZh, setEditingZh] = useState(false),
     [zhDraft, setZhDraft] = useState(descInfo.zh),
     [translating, setTranslating] = useState(false),
     [agree, setAgree] = useState(false),
     [url, setUrl] = useState("");
+  const busy = usePita((v) => v.busy);
+  const installedAgents = usePita((v) => v.installedAgents);
+
+  function scopeLabel(scope: ScopeTarget, agent?: AgentId) {
+    if (agent) return t(agent);
+    if (scope.kind === "global-agent") return t(scope.agentId);
+    return (
+      w.projects.find((p) => p.id === scope.projectId)?.name ?? scope.projectId
+    );
+  }
+
+  async function removeCopy(scope: ScopeTarget, agent?: AgentId) {
+    const ok = await run(
+      agent
+        ? { type: "deploy", action: "remove", id: s.id, target: scope, agent }
+        : {
+            type: "bulkDeploy",
+            action: "remove",
+            ids: [s.id],
+            targets: [scope],
+          },
+      "removed",
+      s.name,
+    );
+    if (ok) {
+      setRemoveTarget(undefined);
+      if (
+        target &&
+        sameScope(target, scope) &&
+        (!agent || scope.kind === "global-agent")
+      )
+        close();
+    }
+  }
+
+  function requestRemove(scope: ScopeTarget, agent?: AgentId) {
+    if (
+      copies(s, scope).some(
+        (d) =>
+          (!agent || d.agentId === agent) &&
+          (d.drifted || d.gitTrackedInProject),
+      )
+    ) {
+      setRemoveTarget({ scope, agent });
+    } else {
+      void removeCopy(scope, agent);
+    }
+  }
 
   useEffect(() => {
     setDel(false);
+    setRemoveTarget(undefined);
     setCreatingPreset(false);
     setEditingZh(false);
     setZhDraft(resolveSkillDescription(s, true).zh);
@@ -105,7 +163,7 @@ export function Detail({
     index >= 0 && index < navIds.length - 1 ? navIds[index + 1] : undefined;
 
   useEffect(() => {
-    if (!onNavigate || del) return;
+    if (!onNavigate || del || removeTarget) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
       if (document.querySelectorAll("[role=dialog]").length > 1) return;
@@ -134,7 +192,7 @@ export function Detail({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onNavigate, del, prevId, nextId, tab]);
+  }, [onNavigate, del, removeTarget, prevId, nextId, tab]);
 
   return (
     <Modal
@@ -189,10 +247,28 @@ export function Detail({
             <Pin size={13} />
             {t("pinVersion")}
           </button>
-          <button className="danger-link" onClick={() => setDel(true)}>
-            <Trash2 size={13} />
-            {t("delete")}
-          </button>
+          {target ? (
+            copies(s, target).length > 0 && (
+              <button
+                className="danger-link"
+                disabled={busy}
+                onClick={() =>
+                  requestRemove(
+                    target,
+                    target.kind === "global-agent" ? target.agentId : undefined,
+                  )
+                }
+              >
+                <Trash2 size={13} />
+                {t("removeFromScope", { name: scopeLabel(target) })}
+              </button>
+            )
+          ) : (
+            <button className="danger-link" onClick={() => setDel(true)}>
+              <Trash2 size={13} />
+              {t("deleteFromLibrary")}
+            </button>
+          )}
         </div>
       </div>
       <div className="detail-presets">
@@ -274,9 +350,11 @@ export function Detail({
                     <span className="detail-desc-label">
                       <Languages size={13} aria-hidden="true" />
                       <strong>{t("zhDesc")}</strong>
-                      <span className="zh-tag" aria-hidden="true">
-                        {t("translatedBadge")}
-                      </span>
+                      {descInfo.isTranslated && (
+                        <span className="zh-tag" aria-hidden="true">
+                          {t("translatedBadge")}
+                        </span>
+                      )}
                     </span>
                     <div className="line">
                       {!editingZh ? (
@@ -291,7 +369,8 @@ export function Detail({
                           <Pencil size={12} />
                           {t("editZhDesc")}
                         </button>
-                      ) : (
+                      ) : null}
+                      {s.description.trim() && (
                         <button
                           type="button"
                           className="text-btn compact-link"
@@ -302,19 +381,31 @@ export function Detail({
                               s.name,
                               s.description,
                             );
-                            setZhDraft(res.text);
+                            if (res.text) {
+                              setZhDraft(res.text);
+                              setEditingZh(true);
+                            }
                             setTranslating(false);
-                            if (res.usedFallback) {
+                            if (res.error) {
                               notify({
-                                key: "translateFallbackNote",
-                                detail: res.error ?? "",
+                                key: res.usedFallback
+                                  ? "translateFallbackNote"
+                                  : "translationUnavailable",
+                                detail: "",
+                                error: !res.usedFallback,
                                 undo: false,
                               });
                             }
                           }}
                         >
                           <RotateCcw size={12} />
-                          {t(translating ? "translating" : "autoTranslate")}
+                          {t(
+                            translating
+                              ? "translating"
+                              : translationEngine === "builtin"
+                                ? "translateWithGoogle"
+                                : "autoTranslate",
+                          )}
                         </button>
                       )}
                     </div>
@@ -339,8 +430,9 @@ export function Detail({
                         }
                       }}
                     >
-                      <input
+                      <textarea
                         autoFocus
+                        rows={4}
                         value={zhDraft}
                         onChange={(e) => setZhDraft(e.target.value)}
                         aria-label={t("zhDesc")}
@@ -362,7 +454,9 @@ export function Detail({
                       </div>
                     </form>
                   ) : (
-                    <p className="detail-zh-text">{descInfo.zh}</p>
+                    <p className="detail-zh-text">
+                      {descInfo.zh || t("noSkillTranslation")}
+                    </p>
                   )}
                   <div className="detail-raw-row">
                     <span className="detail-raw-tag">{t("originalDesc")}</span>
@@ -419,6 +513,8 @@ export function Detail({
                   const d = s.deployments.find(
                     (d) => sameScope(d.scope, scope) && d.agentId === agentId,
                   );
+                  const unavailable =
+                    !d && installedAgents && !installedAgents.includes(agentId);
                   return (
                     <div className="deployment" key={scopeKey(scope) + agentId}>
                       <div className="line">
@@ -431,7 +527,11 @@ export function Detail({
                             : t("global")}
                         </span>
                         <small className="ml-auto">
-                          {t(d?.status ?? "absent")}
+                          {t(
+                            unavailable
+                              ? "agentNotInstalled"
+                              : (d?.status ?? "absent"),
+                          )}
                         </small>
                       </div>
                       <div className="path-inline-row">
@@ -469,31 +569,12 @@ export function Detail({
                             {t("projectWarning")}
                           </small>
                         )}
-                      <div className="line">
-                        <button
-                          disabled={!allowed && d?.status !== "enabled"}
-                          onClick={() =>
-                            run(
-                              {
-                                type: "deploy",
-                                id: s.id,
-                                target: scope,
-                                agent: agentId,
-                                action:
-                                  d?.status === "enabled"
-                                    ? "disable"
-                                    : "enable",
-                              },
-                              d?.status === "enabled" ? "disabled" : "enabled",
-                              s.name,
-                            )
-                          }
-                        >
-                          {t(d?.status === "enabled" ? "disable" : "enable")}
-                        </button>
-                        {!allowed && <small>{t("chooseProjectAgents")}</small>}
-                        {d && (
+                      {!unavailable && (
+                        <div className="line">
                           <button
+                            disabled={
+                              busy || (!allowed && d?.status !== "enabled")
+                            }
                             onClick={() =>
                               run(
                                 {
@@ -501,17 +582,33 @@ export function Detail({
                                   id: s.id,
                                   target: scope,
                                   agent: agentId,
-                                  action: "remove",
+                                  action:
+                                    d?.status === "enabled"
+                                      ? "disable"
+                                      : "enable",
                                 },
-                                "removed",
+                                d?.status === "enabled"
+                                  ? "disabled"
+                                  : "enabled",
                                 s.name,
                               )
                             }
                           >
-                            {t("remove")}
+                            {t(d?.status === "enabled" ? "disable" : "enable")}
                           </button>
-                        )}
-                      </div>
+                          {!allowed && (
+                            <small>{t("chooseProjectAgents")}</small>
+                          )}
+                          {d && (
+                            <button
+                              disabled={busy}
+                              onClick={() => requestRemove(scope, agentId)}
+                            >
+                              {t("remove")}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -563,6 +660,30 @@ export function Detail({
                 {t("delete")}
               </button>
             </div>
+          </div>
+        </Modal>
+      )}
+      {removeTarget && (
+        <Modal
+          title={t("removeFromScope", {
+            name: scopeLabel(removeTarget.scope, removeTarget.agent),
+          })}
+          close={() => setRemoveTarget(undefined)}
+        >
+          <p>{t("removeModifiedCopy")}</p>
+          <div className="actions">
+            <button onClick={() => setRemoveTarget(undefined)}>
+              {t("cancel")}
+            </button>
+            <button
+              className="danger-button"
+              disabled={busy}
+              onClick={() =>
+                void removeCopy(removeTarget.scope, removeTarget.agent)
+              }
+            >
+              {t("remove")}
+            </button>
           </div>
         </Modal>
       )}
@@ -688,7 +809,17 @@ function Ledger({ s }: { s: Skill }) {
           <dd className="mono">
             {tokens.toLocaleString()} {t("tokens")}
           </dd>
+          {s.files["SKILL.md"] && (
+            <>
+              <dt>{t("fullSkillTokens")}</dt>
+              <dd className="mono">
+                {estimateTokens(unpack(s.files["SKILL.md"])).toLocaleString()}{" "}
+                {t("tokens")}
+              </dd>
+            </>
+          )}
         </dl>
+        <small>{t("tokenEstimateMethod")}</small>
         {enabledAgents.map((a) => {
           const active = copies(s, globalTarget(a)).some(
             (d) => d.agentId === a && d.status === "enabled",

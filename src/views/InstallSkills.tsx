@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { useTranslation } from "react-i18next";
 import {
@@ -11,7 +11,6 @@ import {
   Download,
   ExternalLink,
   FolderClosed,
-  Languages,
   LibraryBig,
   MoreHorizontal,
   Plus,
@@ -26,11 +25,12 @@ import { AuditBadge } from "../components/AuditBadge";
 import { TargetPicker, targetName } from "../components/TargetPicker";
 import { auditSkill } from "../services/audit";
 import {
-  buildMarketplaceSkill,
   formatInstalls,
   githubAvatarUrl,
-  marketplaceCatalog,
-  marketplaceSources,
+  loadMarketplace,
+  marketplaceMember,
+  loadMarketplaceRepo,
+  isMarketplacePlaceholder,
   type MarketplaceFeed,
   type MarketplaceItem,
 } from "../services/marketplace";
@@ -48,13 +48,15 @@ import { errorKey, usePita, useWorkspace } from "../store";
 import type { ScopeTarget } from "../types/domain";
 import { copies, scopeAgents, type Skill } from "../types/workspace";
 
+const Markdown = lazy(() => import("react-markdown"));
+
 function MarketAvatar({ item }: { item: MarketplaceItem }) {
   const [failed, setFailed] = useState(false);
   const url = githubAvatarUrl(item.repoUrl);
   if (!url || failed) {
     return (
-      <span className={"market-avatar tone-" + item.orgTone} aria-hidden="true">
-        {item.orgMark}
+      <span className="market-avatar" aria-hidden="true">
+        {item.source.slice(0, 2).toUpperCase()}
       </span>
     );
   }
@@ -337,7 +339,7 @@ export function InstallSkills({
   const { t } = useTranslation(),
     w = useWorkspace(),
     { busy, run } = usePita(),
-    [showZh, setShowZh] = useTranslatePref();
+    [showZh] = useTranslatePref();
 
   const [tab, setTab] = useState<"market" | "local" | "git">("market");
   const [targets, setTargets] = useState<ScopeTarget[]>(() =>
@@ -350,6 +352,25 @@ export function InstallSkills({
   const [sourceFilter, setSourceFilter] = useState("");
   const [showAllSources, setShowAllSources] = useState(false);
   const [previewItem, setPreviewItem] = useState<MarketplaceItem | null>(null);
+  const [feedState, setFeedState] = useState<{
+    items: MarketplaceItem[];
+    page: number;
+    total?: number;
+    hasMore: boolean;
+  }>({ items: [], page: 0, hasMore: false });
+  const [marketStatus, setMarketStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [marketRetry, retryMarket] = useState(0);
+  const [marketPage, setMarketPage] = useState(0);
+  const [shown, setShown] = useState(24);
+  const [preview, setPreview] = useState<{
+    key: string;
+    skill?: Skill;
+    error?: string;
+  }>();
+  const [previewRetry, retryPreview] = useState(0);
+  const [marketInstallError, setMarketInstallError] = useState("");
   const [installingId, setInstallingId] = useState<string | null>(null);
   const marketSearchRef = useRef<HTMLInputElement>(null);
 
@@ -374,7 +395,7 @@ export function InstallSkills({
 
   useEffect(() => {
     setTargets(target && scopeAgents(w, target).length ? [target] : []);
-  }, [target, w]);
+  }, [target]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -402,64 +423,135 @@ export function InstallSkills({
     return () => window.removeEventListener("keydown", onKey);
   }, [tab]);
 
-  const sources = useMemo(() => marketplaceSources(), []);
-  const visibleSources = showAllSources ? sources : sources.slice(0, 5);
+  const query = marketQuery.trim();
+  useEffect(() => {
+    setMarketPage(0);
+    setShown(24);
+    setFeedState({ items: [], page: 0, hasMore: false });
+  }, [query, feed]);
 
-  const marketItems = useMemo(() => {
-    const q = marketQuery.trim().toLowerCase();
-    return marketplaceCatalog
-      .filter(
-        (item) =>
-          (!sourceFilter || item.source === sourceFilter) &&
-          (!q ||
-            [
-              item.name,
-              item.source,
-              item.description,
-              resolveSkillDescription(item, true).zh,
-            ]
-              .join(" ")
-              .toLowerCase()
-              .includes(q)),
-      )
-      .sort((a, b) =>
-        feed === "trending"
-          ? a.weeklyRank - b.weeklyRank
-          : feed === "popular"
-            ? a.popularRank - b.popularRank
-            : b.installs - a.installs,
-      );
-  }, [feed, marketQuery, sourceFilter]);
+  useEffect(() => {
+    if (tab !== "market" || query.length === 1) return;
+    const controller = new AbortController();
+    setMarketStatus("loading");
+    const delay = window.setTimeout(
+      async () => {
+        try {
+          const result = await loadMarketplace(
+            feed,
+            marketPage,
+            query,
+            controller.signal,
+          );
+          if (controller.signal.aborted) return;
+          setFeedState((prior) => ({
+            ...result,
+            page: marketPage,
+            items:
+              marketPage === 0
+                ? result.items
+                : [
+                    ...prior.items,
+                    ...result.items.filter(
+                      (item) =>
+                        !prior.items.some((entry) => entry.key === item.key),
+                    ),
+                  ],
+          }));
+          setMarketStatus("ready");
+        } catch {
+          if (!controller.signal.aborted) setMarketStatus("error");
+        }
+      },
+      query ? 300 : 0,
+    );
+    return () => {
+      window.clearTimeout(delay);
+      controller.abort();
+    };
+  }, [tab, feed, marketPage, query, marketRetry]);
+
+  useEffect(() => {
+    if (!previewItem?.repoUrl) return;
+    let active = true;
+    setPreview(undefined);
+    void loadMarketplaceRepo(
+      previewItem,
+      pitaClient.inspectGit.bind(pitaClient),
+    )
+      .then((skill) => {
+        if (active) setPreview({ key: previewItem.key, skill });
+      })
+      .catch((e) => {
+        if (active) setPreview({ key: previewItem.key, error: errorKey(e) });
+      });
+    return () => {
+      active = false;
+    };
+  }, [previewItem, previewRetry]);
+
+  const sources = [...new Set(feedState.items.map((item) => item.source))];
+  const visibleSources = showAllSources
+    ? sources
+    : [...new Set([...sources.slice(0, 5), sourceFilter].filter(Boolean))];
+  const marketItems = feedState.items.filter(
+    (item) => !sourceFilter || item.source === sourceFilter,
+  );
+
+  function openMarket(item: MarketplaceItem) {
+    setMarketInstallError("");
+    setPreviewItem(item);
+  }
 
   async function installMarketItem(item: MarketplaceItem) {
-    if (busy || installingId) return;
-    const existing = w.skills.find((s) => s.id === item.id);
-    if (existing && isEnabledAtAllTargets(w, existing, targets)) return;
-    setInstallingId(item.id);
+    if (busy || installingId || !item.repoUrl) return;
+    setInstallingId(item.key);
+    setMarketInstallError("");
     try {
-      const ok = existing
-        ? await run(
-            {
-              type: "add",
-              targets,
-              skills: [],
-              reuse: [{ id: existing.id, hash: existing.centralHash }],
-            },
-            "deployedReceipt",
-            item.name,
-          )
-        : await run(
-            {
-              type: "add",
-              targets,
-              skills: [await buildMarketplaceSkill(item)],
-            },
-            targets.length ? "deployedReceipt" : "libraryReceipt",
-            item.name,
-          );
-      if (ok && previewItem?.id === item.id) {
-        setPreviewItem(null);
+      const matched = marketplaceMember(item, w.skills);
+      const candidate =
+        matched && !isMarketplacePlaceholder(matched)
+          ? matched
+          : await loadMarketplaceRepo(
+              item,
+              pitaClient.inspectGit.bind(pitaClient),
+            );
+      const existing = w.skills.find((s) => s.id === candidate.id);
+      if (
+        existing &&
+        matched?.id !== existing.id &&
+        candidate.centralHash !== existing.centralHash
+      ) {
+        throw Error("contentConflict");
       }
+      if (existing && isMarketplacePlaceholder(existing)) {
+        await run(
+          {
+            type: "repairMarketplace",
+            skill: candidate,
+            hash: existing.centralHash,
+            targets,
+          },
+          "updated",
+          item.name,
+        );
+        return;
+      }
+      if (existing && isEnabledAtAllTargets(w, existing, targets)) return;
+      await run(
+        {
+          type: "add",
+          targets,
+          skills: existing ? [] : [candidate],
+          reuse: existing
+            ? [{ id: existing.id, hash: existing.centralHash }]
+            : [],
+        },
+        targets.length ? "deployedReceipt" : "libraryReceipt",
+        item.name,
+      );
+    } catch (e) {
+      setMarketInstallError(errorKey(e));
     } finally {
       setInstallingId(null);
     }
@@ -505,11 +597,18 @@ export function InstallSkills({
   }
 
   const previewExisting = previewItem
-    ? w.skills.find((s) => s.id === previewItem.id)
+    ? marketplaceMember(previewItem, w.skills)
     : undefined;
   const previewComplete = previewItem
-    ? !!previewExisting && isEnabledAtAllTargets(w, previewExisting, targets)
+    ? !!previewExisting &&
+      !isMarketplacePlaceholder(previewExisting) &&
+      isEnabledAtAllTargets(w, previewExisting, targets)
     : false;
+
+  const previewResult = preview?.key === previewItem?.key ? preview : undefined;
+  const previewSkill = previewResult?.skill;
+  const previewDesc =
+    previewSkill && resolveSkillDescription(previewSkill, showZh);
 
   return (
     <div className="install-page">
@@ -577,7 +676,10 @@ export function InstallSkills({
                   key={id}
                   type="button"
                   aria-pressed={feed === id}
-                  onClick={() => setFeed(id)}
+                  onClick={() => {
+                    setSourceFilter("");
+                    setFeed(id);
+                  }}
                 >
                   <Icon size={13} />
                   {t(key)}
@@ -590,25 +692,16 @@ export function InstallSkills({
                 ref={marketSearchRef}
                 type="search"
                 value={marketQuery}
-                onChange={(e) => setMarketQuery(e.target.value)}
+                maxLength={200}
+                onChange={(e) => {
+                  setSourceFilter("");
+                  setMarketQuery(e.target.value);
+                }}
                 placeholder={t("searchMarket")}
                 aria-label={t("searchMarket")}
               />
               <kbd>/</kbd>
             </label>
-            <button
-              type="button"
-              className={
-                "sort-trigger translate-toggle" +
-                (showZh ? " active-control" : "")
-              }
-              aria-pressed={showZh}
-              aria-label={t("translateToggleTip")}
-              title={t("translateToggleTip")}
-              onClick={() => setShowZh(!showZh)}
-            >
-              <Languages size={15} aria-hidden="true" />
-            </button>
           </div>
 
           <div className="source-strip" role="group" aria-label={t("source")}>
@@ -650,80 +743,77 @@ export function InstallSkills({
             )}
           </div>
 
-          {marketItems.length > 0 ? (
+          {marketInstallError && !previewItem && (
+            <p className="warning" role="alert">
+              {t(marketInstallError)}
+            </p>
+          )}
+          {marketItems.length > 0 && (
             <div className="market-grid">
-              {marketItems.map((item) => {
-                const existing = w.skills.find((s) => s.id === item.id);
+              {marketItems.slice(0, shown).map((item) => {
+                const existing = marketplaceMember(item, w.skills);
+                const placeholder =
+                  !!existing && isMarketplacePlaceholder(existing);
                 const done =
-                  !!existing && isEnabledAtAllTargets(w, existing, targets);
-                const working = installingId === item.id;
-                const actionLabel = done
+                  !!existing &&
+                  !placeholder &&
+                  isEnabledAtAllTargets(w, existing, targets);
+                const working = installingId === item.key;
+                const label = done
                   ? t("alreadyInstalledEverywhere", { name: item.name })
-                  : existing
-                    ? t("deployToTargets", { name: item.name })
-                    : t("installToTargets", { name: item.name });
-                const descInfo = resolveSkillDescription(item, showZh);
+                  : t(
+                      placeholder
+                        ? "marketRepair"
+                        : existing
+                          ? "deployToTargets"
+                          : "installToTargets",
+                      { name: item.name },
+                    );
                 return (
-                  <article className="market-card" key={item.id}>
-                    <div className="market-card-head">
+                  <article className="market-card" key={item.key}>
+                    <button
+                      type="button"
+                      className="market-card-open"
+                      onClick={() => openMarket(item)}
+                      aria-label={t("previewSkill", {
+                        name: item.name,
+                        source: item.source,
+                      })}
+                    >
                       <MarketAvatar item={item} />
+                      <strong title={item.name}>{item.name}</strong>
+                    </button>
+                    {item.repoUrl && (
                       <button
                         type="button"
-                        className="market-title-btn"
-                        onClick={() => setPreviewItem(item)}
-                        title={item.name}
+                        className={
+                          "market-install-btn" +
+                          (done ? " installed" : " primary")
+                        }
+                        disabled={done || busy || installingId !== null}
+                        aria-label={label}
+                        title={label}
+                        onClick={() => void installMarketItem(item)}
                       >
-                        <strong>{item.name}</strong>
+                        {working ? (
+                          <Clock size={14} />
+                        ) : done ? (
+                          <Check size={14} />
+                        ) : (
+                          <Plus size={14} />
+                        )}
                       </button>
-                      <div className="market-card-actions">
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label={t("previewSkill", { name: item.name })}
-                          title={t("previewSkill", { name: item.name })}
-                          onClick={() => setPreviewItem(item)}
-                        >
-                          <ExternalLink size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={
-                            "market-install-btn" +
-                            (done ? " installed" : " primary")
-                          }
-                          disabled={done || busy || working}
-                          aria-label={actionLabel}
-                          title={actionLabel}
-                          onClick={() => installMarketItem(item)}
-                        >
-                          {done ? <Check size={14} /> : <Plus size={14} />}
-                        </button>
-                      </div>
-                    </div>
-                    <p
-                      className="market-desc"
-                      title={
-                        descInfo.isTranslated && showZh
-                          ? `${descInfo.zh}\n${t("originalDesc")}: ${descInfo.raw}`
-                          : descInfo.display
-                      }
-                    >
-                      {descInfo.isTranslated && showZh && (
-                        <span className="zh-tag" aria-hidden="true">
-                          {t("translatedBadge")}
-                        </span>
-                      )}
-                      {descInfo.display}
-                    </p>
+                    )}
                     <div className="market-card-foot">
                       <button
                         type="button"
                         className="market-source-tag"
-                        onClick={() =>
+                        onClick={() => {
                           setSourceFilter((prev) =>
                             prev === item.source ? "" : item.source,
-                          )
-                        }
+                          );
+                          setShown(24);
+                        }}
                       >
                         {item.source}
                       </button>
@@ -736,9 +826,8 @@ export function InstallSkills({
                         <Download size={11} />
                         {formatInstalls(item.installs)}
                       </span>
-                      {existing && (
+                      {done && (
                         <span className="badge synced market-installed">
-                          <Check size={11} />
                           {t("installedBadge")}
                         </span>
                       )}
@@ -747,7 +836,20 @@ export function InstallSkills({
                 );
               })}
             </div>
-          ) : (
+          )}
+          {query.length === 1 ? (
+            <p role="status">{t("marketMinQuery")}</p>
+          ) : marketStatus === "loading" ? (
+            <p role="status">{t("marketLoading")}</p>
+          ) : marketStatus === "error" ? (
+            <div className="empty panel" role="status">
+              <SearchX />
+              <b>{t("marketUnavailable")}</b>
+              <button type="button" onClick={() => retryMarket((n) => n + 1)}>
+                {t("retry")}
+              </button>
+            </div>
+          ) : !marketItems.length ? (
             <div className="empty panel">
               <SearchX />
               <b>{t("nothing")}</b>
@@ -761,16 +863,30 @@ export function InstallSkills({
                 {t("clear")}
               </button>
             </div>
-          )}
-
+          ) : null}
           <footer className="list-foot">
             <span>
               {t("results", {
-                shown: marketItems.length,
-                total: marketplaceCatalog.length,
+                shown: Math.min(shown, marketItems.length),
+                total: !sourceFilter
+                  ? (feedState.total ?? marketItems.length)
+                  : marketItems.length,
               })}
             </span>
-            <span>{t("auditSummaryBar")}</span>
+            {(shown < marketItems.length ||
+              (feedState.hasMore && !sourceFilter)) &&
+              marketStatus === "ready" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShown((n) => n + 24);
+                    if (shown >= marketItems.length)
+                      setMarketPage(feedState.page + 1);
+                  }}
+                >
+                  {t("marketMore")}
+                </button>
+              )}
           </footer>
         </Tabs.Content>
 
@@ -969,9 +1085,9 @@ export function InstallSkills({
           title={previewItem.name}
           leading={<MarketAvatar item={previewItem} />}
           close={() => setPreviewItem(null)}
-          flow
+          drawer
         >
-          <div className="flow-body">
+          <div className="drawer-body market-drawer-body">
             <div className="market-preview-meta">
               <span className="market-source-tag static">
                 {previewItem.source}
@@ -982,90 +1098,108 @@ export function InstallSkills({
                   n: formatInstalls(previewItem.installs),
                 })}
               </span>
-              {previewExisting && (
+              {previewComplete && (
                 <span className="badge synced">
                   <Check size={11} />
                   {t("installedBadge")}
                 </span>
               )}
             </div>
-            <div className="detail-desc-box">
-              <p className="detail-zh-text">
-                <span className="zh-tag" aria-hidden="true">
-                  {t("translatedBadge")}
-                </span>
-                {resolveSkillDescription(previewItem, true).zh}
+            {marketInstallError && (
+              <p className="warning" role="alert">
+                {t(marketInstallError)}
               </p>
-              <div className="detail-raw-row">
-                <span className="detail-raw-tag">{t("originalDesc")}</span>
-                <small className="detail-raw-text">
-                  {previewItem.description}
-                </small>
+            )}
+            {!previewItem.repoUrl ? (
+              <p>{t("marketExternalSource")}</p>
+            ) : previewResult?.error ? (
+              <div role="status" className="warning">
+                <p>{t(previewResult.error)}</p>
+                <button
+                  type="button"
+                  onClick={() => retryPreview((n) => n + 1)}
+                >
+                  {t("retry")}
+                </button>
               </div>
-            </div>
-            <dl>
-              <dt>{t("sourceRepo")}</dt>
-              <dd className="mono">
-                {previewItem.repoUrl.replace(/^https:\/\//, "")}
-              </dd>
-              <dt>{t("openSource")}</dt>
-              <dd className="mono">{previewItem.skillPath}</dd>
-            </dl>
-            <div className="preview">
-              <small>{t("preview")}</small>
-              <p>{previewItem.workflowStep}</p>
-            </div>
-            <TargetPicker
-              value={targets}
-              onChange={setTargets}
-              label={t("installLocation")}
-              empty={t("libraryOnly")}
-            />
-            <small>{t("futureScan")}</small>
+            ) : !previewSkill ? (
+              <p role="status">{t("inspecting")}</p>
+            ) : (
+              <>
+                {previewDesc?.display && (
+                  <p className="detail-raw-text">{previewDesc.display}</p>
+                )}
+                <dl>
+                  <dt>{t("openSource")}</dt>
+                  <dd className="mono">
+                    {previewSkill.source.type === "git" &&
+                      previewSkill.source.skillPath}
+                  </dd>
+                  <dt>{t("files")}</dt>
+                  <dd>{Object.keys(previewSkill.files).length}</dd>
+                </dl>
+                <AuditBadge report={auditSkill(previewSkill)} />
+                <details className="preview" open>
+                  <summary>SKILL.md</summary>
+                  <div className="markdown">
+                    <Suspense fallback={<p role="status">{t("inspecting")}</p>}>
+                      <Markdown>{previewSkill.skillMdPreview}</Markdown>
+                    </Suspense>
+                  </div>
+                </details>
+              </>
+            )}
+            {previewItem.repoUrl && (
+              <TargetPicker
+                value={targets}
+                onChange={setTargets}
+                label={t("installLocation")}
+                empty={t("libraryOnly")}
+              />
+            )}
           </div>
-          <footer className="flow-footer">
+          <footer className="flow-footer market-drawer-footer">
             <a
               className="button"
-              href={previewItem.repoUrl}
+              href={previewItem.url}
               target="_blank"
               rel="noreferrer"
               onClick={(e) => {
-                if (isNativeRuntime() && pitaClient.openUrl) {
+                if (pitaClient.openUrl) {
                   e.preventDefault();
-                  void pitaClient.openUrl(previewItem.repoUrl);
+                  void pitaClient.openUrl(previewItem.url);
                 }
               }}
             >
               {t("openOnMarket")}
               <ExternalLink size={13} />
             </a>
-            <button
-              type="button"
-              className="primary"
-              disabled={
-                previewComplete || busy || installingId === previewItem.id
-              }
-              onClick={() => installMarketItem(previewItem)}
-            >
-              {previewComplete ? (
-                <>
-                  <Check size={14} />
-                  {t("installedBadge")}
-                </>
-              ) : (
-                <>
-                  <Plus size={14} />
-                  {t(
-                    previewExisting
-                      ? "install"
+            {previewItem.repoUrl && (
+              <button
+                type="button"
+                className="primary"
+                disabled={
+                  previewComplete ||
+                  busy ||
+                  installingId !== null ||
+                  (!previewSkill && !previewExisting)
+                }
+                onClick={() => void installMarketItem(previewItem)}
+              >
+                {previewComplete ? <Check size={14} /> : <Plus size={14} />}
+                {t(
+                  previewComplete
+                    ? "installedBadge"
+                    : previewExisting &&
+                        isMarketplacePlaceholder(previewExisting)
+                      ? "marketRepair"
                       : targets.length
                         ? "installCount"
                         : "libraryCount",
-                    { n: 1 },
-                  )}
-                </>
-              )}
-            </button>
+                  { n: 1, name: previewItem.name },
+                )}
+              </button>
+            )}
           </footer>
         </Modal>
       )}

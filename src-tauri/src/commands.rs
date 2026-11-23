@@ -21,6 +21,82 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+#[tauri::command]
+pub async fn detect_installed_agents(ctx: RuntimeContext) -> Result<Vec<AgentId>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ctx.enabled_agents
+            .iter()
+            .filter(|agent| crate::adapters::agent_is_present(agent, &ctx))
+            .cloned()
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn marketplace_feed(
+    view: String,
+    page: u32,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let query = query.trim();
+    if !matches!(view.as_str(), "all-time" | "trending" | "hot")
+        || query.chars().count() > 200
+        || page > 500
+    {
+        return Err("marketUnavailable".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|_| "marketUnavailable")?;
+    let request = if query.is_empty() {
+        client.get(format!("https://skills.sh/api/skills/{}/{}", view, page))
+    } else {
+        client
+            .get("https://skills.sh/api/search")
+            .query(&[("q", query), ("limit", "80")])
+    };
+    request
+        .send()
+        .await
+        .map_err(|_| "marketUnavailable")?
+        .error_for_status()
+        .map_err(|_| "marketUnavailable")?
+        .json()
+        .await
+        .map_err(|_| "marketUnavailable".into())
+}
+
+#[tauri::command]
+pub async fn translate_description(text: String) -> Result<serde_json::Value, String> {
+    if text.trim().is_empty() || text.chars().count() > 4_000 {
+        return Err("translationUnavailable".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|_| "translationUnavailable")?;
+    client
+        .get("https://translate.googleapis.com/translate_a/single")
+        .query(&[
+            ("client", "gtx"),
+            ("sl", "auto"),
+            ("tl", "zh-CN"),
+            ("dt", "t"),
+            ("q", &text),
+        ])
+        .send()
+        .await
+        .map_err(|_| "translationUnavailable")?
+        .error_for_status()
+        .map_err(|_| "translationUnavailable")?
+        .json()
+        .await
+        .map_err(|_| "translationUnavailable".into())
+}
+
 pub struct AppState {
     pub engine: Arc<WorkspaceEngine>,
 }

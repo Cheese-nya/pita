@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,19 +14,34 @@ import {
   type Workspace,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
-import { AgentIcon } from "./ui";
+import { AddAgentButton, AgentIcon } from "./ui";
 
 const LOGO = 30;
 const REST_GAP = 10;
-const EXTRA_GAP = 10; // extra breathing room between open readout and next logo
-const READOUT_W = 64;
-const BASE_PX_PER_TOKEN = 0.2;
+const STACK_STEP = 22;
+const MIN_STACK_STEP = 17;
+const READOUT_GAP_BAR = 10; // 6px past the 4px .token-cap overhang when barW > 0
+const READOUT_GAP_ZERO = 6; // 6px past logo circle when barW === 0
+const TRAILING_GAP = 8;
 const MAX_BAR_W = 64;
 const TRIGGER_RADIUS = 21; // logo radius is 15px -> triggers only within ~6px of logo edge
 const SWITCH_MOVE_PX = 14; // pointer movement needed after switching before auto-closing on gap
 const SPRING_OPEN_K = 105; // critically damped ~480ms silky glide
 const SPRING_CLOSE_K = 120; // critically damped ~430ms gentle tuck-in
 const DRAG_THRESHOLD_PX = 6;
+
+function estimateReadoutWidth(
+  tokens: number,
+  unit: string,
+  interactive: boolean,
+): number {
+  return Math.ceil(
+    tokens.toLocaleString().length * 7.2 +
+      unit.length * 6.4 +
+      4 +
+      (interactive ? 10 : 0),
+  );
+}
 
 interface DragState {
   id: AgentId;
@@ -43,13 +59,16 @@ export function AgentTokenDock({
   target,
   onSortByTokens,
   sortedByTokens = false,
+  onAddAgent,
 }: {
   w: Workspace;
   target?: ScopeTarget;
   onSortByTokens?: () => void;
   sortedByTokens?: boolean;
+  onAddAgent?: () => void;
 }) {
   const { t } = useTranslation();
+  const tokShort = t("tokShort");
   const enabledAgents = useSettings((s) => s.enabledAgents);
   const reorderAgents = useSettings((s) => s.reorderAgents);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
@@ -58,8 +77,12 @@ export function AgentTokenDock({
   const dockRef = useRef<HTMLDivElement>(null);
   const laneRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const readoutRefs = useRef<(HTMLElement | null)[]>([]);
   const [laneWidth, setLaneWidth] = useState(680);
   const [pinnedId, setPinnedId] = useState<AgentId | null>(null);
+  const [readoutWidths, setReadoutWidths] = useState<Record<string, number>>(
+    {},
+  );
   const [dragUI, setDragUI] = useState<{
     id: AgentId;
     dragOffsetX: number;
@@ -88,6 +111,7 @@ export function AgentTokenDock({
     [w, target, agentIds, tokenBudgetEnabled, tokenBudgetLimit],
   );
   const hasAgents = stats.length > 0;
+  const stacked = !!onAddAgent;
 
   // Reset pin if the pinned agent is no longer in this scope.
   useEffect(() => {
@@ -96,57 +120,114 @@ export function AgentTokenDock({
     }
   }, [agentIds, pinnedId]);
 
+  useLayoutEffect(() => {
+    readoutRefs.current.length = stats.length;
+    const next: Record<string, number> = {};
+    for (let i = 0; i < stats.length; i++) {
+      const el = readoutRefs.current[i];
+      if (el) {
+        const w = Math.ceil(el.offsetWidth);
+        if (w > 0) next[stats[i].id] = w;
+      }
+    }
+    setReadoutWidths((prev) => {
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every((k) => prev[k] === next[k])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [stats, pinnedId, onSortByTokens, tokShort]);
+
   const layout = useMemo(() => {
     const n = stats.length;
-    if (!n) return { items: [], stride: LOGO + REST_GAP };
-
     const restGap = n > 6 ? 6 : REST_GAP;
-    const stride = LOGO + restGap;
+    const stride = stacked
+      ? Math.max(
+          MIN_STACK_STEP,
+          Math.min(
+            STACK_STEP,
+            Math.floor((laneWidth - LOGO - 120) / Math.max(1, n)),
+          ),
+        )
+      : LOGO + restGap;
+    const overlap = stacked ? LOGO - stride : 0;
+    const separation = stacked ? overlap + 4 : 0;
+    const restWidth = LOGO + (stacked ? n : Math.max(0, n - 1)) * stride;
     const maxTokens = Math.max(0, ...stats.map((x) => x.tokens));
+    const getReadoutW = (x: (typeof stats)[number]) =>
+      readoutWidths[x.id] ??
+      estimateReadoutWidth(
+        x.tokens,
+        tokShort,
+        !!(onSortByTokens && pinnedId === x.id),
+      );
+    const maxReadout = Math.max(36, ...stats.map(getReadoutW));
     const fixedChrome =
-      n * LOGO + Math.max(0, n - 1) * restGap + READOUT_W + EXTRA_GAP + 8;
+      restWidth +
+      separation +
+      overlap +
+      READOUT_GAP_BAR +
+      maxReadout +
+      TRAILING_GAP +
+      8;
     const maxBar = Math.min(MAX_BAR_W, Math.max(16, laneWidth - fixedChrome));
-    const scale =
-      maxTokens * BASE_PX_PER_TOKEN > maxBar && maxTokens > 0
-        ? maxBar / maxTokens
-        : BASE_PX_PER_TOKEN;
+    const scale = Math.max(1, maxTokens, n === 1 ? tokenBudgetLimit : 0);
 
     const items = stats.map((item, idx) => {
       const barW =
         item.tokens > 0
-          ? Math.min(maxBar, Math.max(12, Math.round(item.tokens * scale)))
+          ? Math.max(3, Math.round((maxBar * item.tokens) / scale))
           : 0;
       const restX = idx * stride;
-      const extraSpace = barW + READOUT_W + EXTRA_GAP;
-      return { ...item, barW, restX, extraSpace };
+      const readoutGap = barW > 0 ? READOUT_GAP_BAR : READOUT_GAP_ZERO;
+      const readoutW = getReadoutW(item);
+      const extraSpace = Math.max(
+        0,
+        LOGO - stride + barW + readoutGap + readoutW + TRAILING_GAP,
+      );
+      return { ...item, barW, restX, readoutGap, readoutW, extraSpace };
     });
 
-    return { items, stride };
-  }, [stats, laneWidth]);
+    return { items, stride, separation, restWidth };
+  }, [
+    stats,
+    laneWidth,
+    tokenBudgetLimit,
+    stacked,
+    readoutWidths,
+    tokShort,
+    pinnedId,
+    onSortByTokens,
+  ]);
 
   const stateRef = useRef({
-    items: layout.items,
+    layout,
     pinnedId,
     isDragging: !!dragUI,
   });
   stateRef.current = {
-    items: layout.items,
+    layout,
     pinnedId,
     isDragging: !!dragUI,
   };
 
   useEffect(() => {
-    const lane = laneRef.current;
-    if (!lane) return;
+    const dock = dockRef.current;
+    if (!dock) return;
     const update = () => {
-      const width = lane.clientWidth;
+      const width = dock.clientWidth - (stacked ? 8 : 0);
       if (width > 0) setLaneWidth(width);
     };
     update();
     const ro = new ResizeObserver(update);
-    ro.observe(lane);
+    ro.observe(dock);
     return () => ro.disconnect();
-  }, [hasAgents]);
+  }, [hasAgents, stacked]);
 
   // Pointer drag-to-reorder listeners
   useEffect(() => {
@@ -237,40 +318,50 @@ export function AgentTokenDock({
 
     function getActiveId(): AgentId | null {
       if (stateRef.current.isDragging) return null;
-      return stateRef.current.pinnedId ?? focusedId ?? hoveredId;
+      return stateRef.current.pinnedId ?? hoveredId ?? focusedId;
     }
 
     function computePositions() {
-      const items = stateRef.current.items;
+      const { items, separation } = stateRef.current.layout;
       let acc = 0;
       return items.map((item) => {
-        const exp = expands.get(item.id) ?? 0;
-        const left = item.restX + acc;
+        const exp = stateRef.current.isDragging
+          ? 0
+          : (expands.get(item.id) ?? 0);
+        const closedLeft = item.restX + acc;
+        const left = closedLeft + exp * separation;
+        acc += exp * separation;
         acc += exp * item.extraSpace;
-        return { item, exp, left };
+        return { item, exp, closedLeft, left, endOffset: acc };
       });
     }
 
     function applyStyles() {
-      const items = stateRef.current.items;
+      const { restWidth } = stateRef.current.layout;
       const activeId = getActiveId();
-      let acc = 0;
+      const positions = computePositions();
       let maxExp = 0;
 
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const exp = stateRef.current.isDragging ? 0 : (expands.get(item.id) ?? 0);
+      for (const [i, { item, exp, left }] of positions.entries()) {
         if (exp > maxExp) maxExp = exp;
         const el = itemRefs.current[i];
         if (el) {
           el.style.setProperty("--expand", exp.toFixed(4));
-          el.style.setProperty("--offset-x", `${acc.toFixed(2)}px`);
+          el.style.setProperty(
+            "--offset-x",
+            `${(left - item.restX).toFixed(2)}px`,
+          );
           el.dataset.active =
             activeId === item.id && exp > 0.04 ? "true" : "false";
         }
-        acc += exp * item.extraSpace;
       }
 
+      const offset = positions.at(-1)?.endOffset ?? 0;
+      lane!.style.setProperty("--stack-offset", `${offset.toFixed(2)}px`);
+      lane!.style.setProperty(
+        "--track-width",
+        `${(restWidth + offset).toFixed(2)}px`,
+      );
       dock!.style.setProperty("--any-open", maxExp.toFixed(4));
       dock!.dataset.open = maxExp > 0.35 ? "true" : "false";
     }
@@ -283,7 +374,7 @@ export function AgentTokenDock({
       );
       lastTime = now;
 
-      const items = stateRef.current.items;
+      const { items } = stateRef.current.layout;
       const activeId = getActiveId();
       let moving = false;
 
@@ -342,6 +433,21 @@ export function AgentTokenDock({
       const rect = getLaneRect();
       const positions = computePositions();
       const cy = rect.top + LOGO / 2;
+      const current = positions.find(({ item }) => item.id === hoveredId);
+
+      if (current && py >= rect.top - 6 && py <= rect.bottom + 6) {
+        const left = rect.left + current.closedLeft - 2;
+        const right =
+          rect.left +
+          current.left +
+          LOGO +
+          (current.item.barW +
+            current.item.readoutGap +
+            current.item.readoutW +
+            TRAILING_GAP) *
+            current.exp;
+        if (px >= left && px <= right) return;
+      }
 
       let closestId: AgentId | null = null;
       let closestDist = TRIGGER_RADIUS;
@@ -364,19 +470,7 @@ export function AgentTokenDock({
       }
 
       if (hoveredId) {
-        const active = positions.find((p) => p.item.id === hoveredId);
-        if (active) {
-          const leftBound = rect.left + active.left - 6;
-          const rightBound =
-            rect.left +
-            active.left +
-            LOGO +
-            (active.item.barW + READOUT_W) * Math.max(active.exp, 0.25) +
-            8;
-          const inVertical = py >= rect.top - 6 && py <= rect.bottom + 6;
-          if (inVertical && px >= leftBound && px <= rightBound) {
-            return;
-          }
+        if (current) {
           if (
             switchAnchor &&
             Math.hypot(px - switchAnchor.x, py - switchAnchor.y) <
@@ -393,6 +487,7 @@ export function AgentTokenDock({
 
     function onPointerMove(e: PointerEvent) {
       if (e.pointerType === "touch" || stateRef.current.isDragging) return;
+      if ((e.target as Element | null)?.closest(".agent-add-button")) return;
       hitTest(e.clientX, e.clientY);
     }
 
@@ -411,8 +506,12 @@ export function AgentTokenDock({
         const id = btn.dataset.agentId as AgentId | undefined;
         if (id) {
           focusedId = id;
+          hoveredId = null;
           schedule();
         }
+      } else if ((e.target as Element | null)?.closest(".agent-add-button")) {
+        focusedId = null;
+        schedule();
       }
     }
 
@@ -428,7 +527,7 @@ export function AgentTokenDock({
       schedule();
     };
 
-    for (const item of stateRef.current.items) {
+    for (const item of stateRef.current.layout.items) {
       expands.set(item.id, stateRef.current.pinnedId === item.id ? 1 : 0);
     }
     applyStyles();
@@ -463,13 +562,18 @@ export function AgentTokenDock({
       ref={dockRef}
       className={
         "token-dock" +
+        (stacked ? " stacked" : "") +
         (canReorder ? " reorderable" : "") +
         (dragUI ? " is-dragging" : "")
       }
       role="group"
       aria-label={t("tokenUsage")}
     >
-      <div className="token-lane" ref={laneRef}>
+      <div
+        className="token-lane"
+        ref={laneRef}
+        style={{ "--stack-step": `${layout.stride}px` } as CSSProperties}
+      >
         {layout.items.map((item, idx) => {
           const isPinned = pinnedId === item.id;
           const isDragged = dragUI?.id === item.id;
@@ -516,6 +620,7 @@ export function AgentTokenDock({
                 {
                   "--rest-x": `${item.restX}px`,
                   "--bar-w": `${item.barW}px`,
+                  "--readout-gap": `${item.readoutGap}px`,
                   "--drag-x": `${dragShiftX}px`,
                 } as CSSProperties
               }
@@ -532,9 +637,14 @@ export function AgentTokenDock({
                 data-agent-id={item.id}
                 aria-label={summary}
                 aria-pressed={isPinned}
-                title={summary}
+                title={stacked ? undefined : summary}
                 onPointerDown={(e) => {
-                  if (!canReorder || e.button !== 0) return;
+                  if (
+                    !canReorder ||
+                    e.button !== 0 ||
+                    e.pointerType === "touch"
+                  )
+                    return;
                   dragRef.current = {
                     id: item.id,
                     startX: e.clientX,
@@ -572,6 +682,9 @@ export function AgentTokenDock({
               </button>
               {onSortByTokens && isPinned ? (
                 <button
+                  ref={(el) => {
+                    readoutRefs.current[idx] = el;
+                  }}
                   type="button"
                   className={
                     "token-readout interactive mono" +
@@ -583,10 +696,13 @@ export function AgentTokenDock({
                   onClick={onSortByTokens}
                 >
                   <b>{item.tokens.toLocaleString()}</b>
-                  <i>{t("tokShort")}</i>
+                  <i>{tokShort}</i>
                 </button>
               ) : (
                 <span
+                  ref={(el) => {
+                    readoutRefs.current[idx] = el;
+                  }}
                   className={
                     "token-readout mono" +
                     (onSortByTokens ? " interactive" : "") +
@@ -597,12 +713,20 @@ export function AgentTokenDock({
                   onClick={onSortByTokens}
                 >
                   <b>{item.tokens.toLocaleString()}</b>
-                  <i>{t("tokShort")}</i>
+                  <i>{tokShort}</i>
                 </span>
               )}
             </div>
           );
         })}
+        {onAddAgent && (
+          <div
+            className="token-dock-addon"
+            style={{ left: layout.items.length * layout.stride }}
+          >
+            <AddAgentButton appearance="dock" onClick={onAddAgent} />
+          </div>
+        )}
       </div>
     </div>
   );

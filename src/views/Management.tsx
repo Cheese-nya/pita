@@ -84,7 +84,9 @@ export function Updates({
         sub={
           t("updatesSub").replace(/[。.]$/, "") +
           " · " +
-          t("checked", { time: timestamp(w.checkedAt, i18n.language) })
+          (w.checkedAt && Number.isFinite(Date.parse(w.checkedAt))
+            ? t("checked", { time: timestamp(w.checkedAt, i18n.language) })
+            : t("notCheckedYet"))
         }
         action={
           <button
@@ -172,10 +174,10 @@ export function Updates({
                             {k === "uncheckable"
                               ? t("cannotCheck")
                               : s.source.type === "git"
-                                ? s.source.commit.slice(0, 8)
+                                ? (s.source.commit?.slice(0, 8) ?? "")
                                 : ""}
                             {k === "available"
-                              ? " → " + s.upstream?.commit.slice(0, 8)
+                              ? " → " + (s.upstream?.commit?.slice(0, 8) ?? "—")
                               : ""}
                           </small>
                         </div>

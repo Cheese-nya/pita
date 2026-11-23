@@ -63,6 +63,7 @@ export function isNativeRuntime(): boolean {
 }
 export interface PitaClient {
   load(): Promise<Workspace>;
+  detectInstalledAgents?(): Promise<AgentId[]>;
   execute(c: Command, progress?: (name: string) => void): Promise<Workspace>;
   undo(): Promise<Workspace>;
   inspectGit(url: string): Promise<Inspection>;

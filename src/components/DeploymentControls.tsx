@@ -25,7 +25,7 @@ import {
   type Skill,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
-import { AgentBadge, AgentIcon, Modal } from "./ui";
+import { AddAgentButton, AgentBadge, AgentIcon, Modal } from "./ui";
 import { usePita, useWorkspace } from "../store";
 import { targetName } from "./TargetPicker";
 
@@ -91,6 +91,7 @@ interface PopoverEntry {
   readonly status:
     "enabled" | "disabled-native" | "disabled-staging" | "absent";
   readonly drifted: boolean;
+  readonly unavailable: boolean;
   readonly verb: "install" | "enable" | "disable";
   readonly label: string;
   readonly toggle: () => Promise<boolean>;
@@ -103,6 +104,7 @@ function AgentRingPopover({
   entries,
   busy,
   onOpenDrift,
+  onAddAgent,
   close,
 }: {
   anchor: HTMLElement | null;
@@ -111,6 +113,7 @@ function AgentRingPopover({
   entries: readonly PopoverEntry[];
   busy: boolean;
   onOpenDrift?: () => void;
+  onAddAgent: () => void;
   close: () => void;
 }) {
   const { t } = useTranslation();
@@ -123,13 +126,25 @@ function AgentRingPopover({
     y: -9999,
   });
 
-  const ringRadius = entries.length <= 6 ? 64 : entries.length <= 8 ? 72 : 84;
+  const slotCount = entries.length + 1;
+  const ringRadius = Math.min(
+    124,
+    Math.max(
+      slotCount <= 6 ? 64 : slotCount <= 8 ? 72 : 84,
+      Math.ceil(21 / Math.sin(Math.PI / slotCount)),
+    ),
+  );
   const haloRadius = ringRadius + 96;
 
   const nodes = useMemo(() => {
-    const n = entries.length;
-    return entries.map((entry, idx) => {
-      const deg = -90 + (idx * 360) / Math.max(1, n);
+    const addIndex = Math.round((slotCount * 5) / 8);
+    const slots = [
+      ...entries.slice(0, addIndex),
+      null,
+      ...entries.slice(addIndex),
+    ];
+    return slots.map((entry, idx) => {
+      const deg = -90 + (idx * 360) / slotCount;
       const rad = (deg * Math.PI) / 180;
       return {
         entry,
@@ -138,7 +153,7 @@ function AgentRingPopover({
         y: Math.round(Math.sin(rad) * ringRadius),
       };
     });
-  }, [entries, ringRadius]);
+  }, [entries, ringRadius, slotCount]);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -249,15 +264,17 @@ function AgentRingPopover({
                     : "")
               }
             >
-              {activeEntry.drifted
-                ? t("drift")
-                : t(
-                    activeEntry.status === "enabled"
-                      ? "pressDisable"
-                      : activeEntry.status === "absent"
-                        ? "pressInstall"
-                        : "pressEnable",
-                  )}
+              {activeEntry.unavailable
+                ? t("agentNotInstalled")
+                : activeEntry.drifted
+                  ? t("drift")
+                  : t(
+                      activeEntry.status === "enabled"
+                        ? "pressDisable"
+                        : activeEntry.status === "absent"
+                          ? "pressInstall"
+                          : "pressEnable",
+                    )}
             </small>
             {activeEntry.drifted && onOpenDrift && (
               <button
@@ -302,16 +319,16 @@ function AgentRingPopover({
 
       {/* Circularly arranged Agent toggle orbs */}
       {nodes.map(({ entry: e, idx, x, y }) => {
-        const Mark = e.drifted
+        const Mark = e?.drifted
           ? TriangleAlert
-          : e.status === "enabled"
+          : e?.status === "enabled"
             ? Check
-            : e.status === "absent"
+            : e?.status === "absent"
               ? Plus
               : Minus;
         return (
           <div
-            key={e.id}
+            key={e?.id ?? "add-agent"}
             className="ring-node-slot"
             style={
               {
@@ -323,50 +340,70 @@ function AgentRingPopover({
               } as CSSProperties
             }
           >
-            <button
-              ref={(el) => {
-                nodeRefs.current[idx] = el;
-              }}
-              type="button"
-              className={
-                "ring-node " +
-                (e.status === "enabled" ? "on" : "off") +
-                (e.drifted ? " drifted" : "") +
-                (focusedId === e.id ? " focused" : "")
-              }
-              aria-label={e.label}
-              aria-pressed={e.status === "enabled"}
-              title={e.label}
-              disabled={busy}
-              onPointerEnter={() => setFocusedId(e.id)}
-              onFocus={() => setFocusedId(e.id)}
-              onClick={() => {
-                if (e.drifted && onOpenDrift) {
-                  close();
-                  onOpenDrift();
-                } else {
-                  void e.toggle();
+            {e ? (
+              <button
+                ref={(el) => {
+                  nodeRefs.current[idx] = el;
+                }}
+                type="button"
+                className={
+                  "ring-node " +
+                  (e.status === "enabled" ? "on" : "off") +
+                  (e.drifted ? " drifted" : "") +
+                  (focusedId === e.id ? " focused" : "")
                 }
-              }}
-            >
-              <span className="ring-node-orb" aria-hidden="true">
-                <AgentIcon id={e.id} size={20} />
-                <span
-                  className={
-                    "ring-node-badge " +
-                    (e.drifted
-                      ? "drifted"
-                      : e.status === "enabled"
-                        ? "on"
-                        : e.status === "absent"
-                          ? "absent"
-                          : "off")
+                aria-label={e.label}
+                aria-pressed={e.status === "enabled"}
+                title={e.label}
+                disabled={busy}
+                aria-disabled={e.unavailable || undefined}
+                onPointerEnter={() => setFocusedId(e.id)}
+                onFocus={() => setFocusedId(e.id)}
+                onClick={() => {
+                  if (e.unavailable) return;
+                  if (e.drifted && onOpenDrift) {
+                    close();
+                    onOpenDrift();
+                  } else {
+                    void e.toggle();
                   }
-                >
-                  <Mark size={9} />
+                }}
+              >
+                <span className="ring-node-orb" aria-hidden="true">
+                  <AgentIcon id={e.id} size={20} />
+                  {!e.unavailable && (
+                    <span
+                      className={
+                        "ring-node-badge " +
+                        (e.drifted
+                          ? "drifted"
+                          : e.status === "enabled"
+                            ? "on"
+                            : e.status === "absent"
+                              ? "absent"
+                              : "off")
+                      }
+                    >
+                      <Mark size={9} />
+                    </span>
+                  )}
                 </span>
-              </span>
-            </button>
+              </button>
+            ) : (
+              <AddAgentButton
+                appearance="ring"
+                ref={(el) => {
+                  nodeRefs.current[idx] = el;
+                }}
+                onPointerEnter={() => setFocusedId(null)}
+                onFocus={() => setFocusedId(null)}
+                onClick={() => {
+                  close();
+                  anchor?.focus({ preventScroll: true });
+                  onAddAgent();
+                }}
+              />
+            )}
           </div>
         );
       })}
@@ -380,16 +417,18 @@ export function DeploymentControls({
   target,
   limit,
   onOpenDrift,
+  onAddAgent,
 }: {
   skill: Skill;
   target?: ScopeTarget;
   limit: number;
   onOpenDrift?: (skillId: string) => void;
+  onAddAgent: () => void;
 }) {
   const { t } = useTranslation(),
     w = useWorkspace(),
     enabledAgents = useSettings((s) => s.enabledAgents),
-    { run, busy } = usePita();
+    { run, busy, installedAgents } = usePita();
   const [expanded, setExpanded] = useState(false);
   const moreRef = useRef<HTMLButtonElement>(null);
   const ids = target ? scopeAgents(w, target) : enabledAgents;
@@ -397,6 +436,8 @@ export function DeploymentControls({
     const scope = target ?? globalTarget(id);
     const copy = copies(skill, scope).find((d) => d.agentId === id);
     const status = copy?.status ?? "absent";
+    const unavailable =
+      status === "absent" && !!installedAgents && !installedAgents.includes(id);
     const drifted = !!copy?.drifted;
     const action = status === "enabled" ? "disable" : "enable";
     const verb = status === "absent" ? "install" : action;
@@ -404,9 +445,11 @@ export function DeploymentControls({
       skill.name,
       target?.kind === "project" ? targetName(w, target, t) : t("global"),
       t(id),
-      t(status),
-      drifted ? t("driftedAction") : t(verb),
-    ].join(" · ");
+      unavailable ? t("agentNotInstalled") : t(status),
+      unavailable ? "" : drifted ? t("driftedAction") : t(verb),
+    ]
+      .filter(Boolean)
+      .join(" · ");
     const toggle = () =>
       run(
         { type: "deploy", id: skill.id, target: scope, agent: id, action },
@@ -417,17 +460,19 @@ export function DeploymentControls({
             : "disabled",
         skill.name,
       );
-    return { id, status, drifted, verb, label, toggle } as const;
+    return { id, status, drifted, unavailable, verb, label, toggle } as const;
   });
   if (target?.kind === "global-agent" && entries.length === 1) {
     const e = entries[0];
     const isEnabled = e.status === "enabled";
     const isAbsent = e.status === "absent";
-    const statusText = isEnabled
-      ? t("enabled")
-      : isAbsent
-        ? t("install")
-        : t(e.status === "disabled-staging" ? "stagedShort" : "nativeShort");
+    const statusText = e.unavailable
+      ? t("agentNotInstalled")
+      : isEnabled
+        ? t("enabled")
+        : isAbsent
+          ? t("install")
+          : t(e.status === "disabled-staging" ? "stagedShort" : "nativeShort");
     return (
       <div
         className="agent-group single-agent-group"
@@ -443,10 +488,10 @@ export function DeploymentControls({
           aria-label={e.label}
           title={e.label}
           aria-pressed={isEnabled}
-          disabled={busy}
+          disabled={busy || e.unavailable}
           onClick={e.toggle}
         >
-          {isAbsent ? (
+          {e.unavailable ? null : isAbsent ? (
             <Plus size={13} aria-hidden="true" />
           ) : (
             <span className="switch-track" aria-hidden="true">
@@ -467,6 +512,7 @@ export function DeploymentControls({
           status={e.status}
           drifted={e.drifted}
           disabled={busy}
+          unavailable={e.unavailable}
           label={e.label}
           onClick={
             e.drifted && onOpenDrift ? () => onOpenDrift(skill.id) : e.toggle
@@ -498,6 +544,7 @@ export function DeploymentControls({
           entries={entries}
           busy={busy}
           onOpenDrift={onOpenDrift ? () => onOpenDrift(skill.id) : undefined}
+          onAddAgent={onAddAgent}
           close={() => setExpanded(false)}
         />
       )}

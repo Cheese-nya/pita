@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AgentId, BuiltinAgentId, CustomAgentId } from "../types/domain";
+import { isValidHarnessIconDataUrl } from "./harnessIcon";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ViewMode = "list" | "matrix";
@@ -7,6 +8,7 @@ export type RowDensity = "comfortable" | "compact";
 export type SortKey = "byName" | "bySize" | "byTime" | "byStatus";
 export type TranslationEngine = "builtin" | "custom";
 export type PresetSyncDefault = "sync" | "later";
+export const DEFAULT_TOKEN_BUDGET = 20_000;
 
 export interface CustomHarness {
   id: CustomAgentId;
@@ -14,6 +16,7 @@ export interface CustomHarness {
   path: string;
   projectDir: string;
   color: string;
+  icon?: string;
 }
 
 export const CUSTOM_HARNESS_COLORS = [
@@ -106,7 +109,7 @@ function defaultSettings(): PitaSettings {
     customApiModel: "gpt-4o-mini",
     customApiKey: "",
     tokenBudgetEnabled: true,
-    tokenBudgetLimit: 320,
+    tokenBudgetLimit: DEFAULT_TOKEN_BUDGET,
     presetSyncDefault: "sync",
     agentDrawerOpen: false,
   };
@@ -119,16 +122,22 @@ function loadSettings(): PitaSettings {
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<PitaSettings>;
     const customHarnesses: CustomHarness[] = Array.isArray(parsed.customHarnesses)
-      ? parsed.customHarnesses.filter(
-          (h): h is CustomHarness =>
-            !!h &&
-            typeof h.id === "string" &&
-            /^custom:[a-z0-9][a-z0-9_-]{0,47}$/.test(h.id) &&
-            typeof h.name === "string" &&
-            !!h.name.trim() &&
-            typeof h.path === "string" &&
-            !!h.path.trim(),
-        )
+      ? parsed.customHarnesses
+          .filter(
+            (h): h is CustomHarness =>
+              !!h &&
+              typeof h.id === "string" &&
+              /^custom:[a-z0-9][a-z0-9_-]{0,47}$/.test(h.id) &&
+              typeof h.name === "string" &&
+              !!h.name.trim() &&
+              typeof h.path === "string" &&
+              !!h.path.trim(),
+          )
+          .map((h) => {
+            if (isValidHarnessIconDataUrl(h.icon)) return h;
+            const { icon: _ignored, ...rest } = h;
+            return rest;
+          })
       : [];
     const knownIds: AgentId[] = [
       ...ALL_AGENT_IDS,
@@ -163,7 +172,8 @@ function loadSettings(): PitaSettings {
       tokenBudgetLimit:
         typeof parsed.tokenBudgetLimit === "number" &&
         Number.isFinite(parsed.tokenBudgetLimit) &&
-        parsed.tokenBudgetLimit >= 50
+        parsed.tokenBudgetLimit >= 50 &&
+        parsed.tokenBudgetLimit !== 320
           ? Math.round(parsed.tokenBudgetLimit)
           : base.tokenBudgetLimit,
     };
@@ -190,7 +200,18 @@ interface SettingsStore extends PitaSettings {
     path: string;
     projectDir?: string;
     color?: string;
+    icon?: string;
   }): CustomHarness | null;
+  updateCustomHarness(
+    id: CustomAgentId,
+    patch: {
+      name?: string;
+      path?: string;
+      projectDir?: string;
+      color?: string;
+      icon?: string | null;
+    },
+  ): void;
   removeCustomHarness(id: CustomAgentId): void;
   setThemeMode(mode: ThemeMode): void;
   setDefaultView(view: ViewMode): void;
@@ -303,7 +324,14 @@ export const useSettings = create<SettingsStore>((set, get) => ({
       CUSTOM_HARNESS_COLORS[
         get().customHarnesses.length % CUSTOM_HARNESS_COLORS.length
       ];
-    const harness: CustomHarness = { id, name, path, projectDir, color };
+    const harness: CustomHarness = {
+      id,
+      name,
+      path,
+      projectDir,
+      color,
+      ...(isValidHarnessIconDataUrl(input.icon) ? { icon: input.icon } : {}),
+    };
     set({
       customHarnesses: [...get().customHarnesses, harness],
       agentOrder: [...get().agentOrder, id],
@@ -311,6 +339,37 @@ export const useSettings = create<SettingsStore>((set, get) => ({
     });
     persistSettings(extract(get()));
     return harness;
+  },
+  updateCustomHarness(id, patch) {
+    const current = get().customHarnesses;
+    if (!current.some((h) => h.id === id)) return;
+    const nextCustom = current.map((h) => {
+      if (h.id !== id) return h;
+      const next: CustomHarness = { ...h };
+      if (typeof patch.name === "string" && patch.name.trim()) {
+        next.name = patch.name.trim();
+      }
+      if (typeof patch.path === "string" && patch.path.trim()) {
+        next.path = patch.path.trim();
+      }
+      if (typeof patch.projectDir === "string") {
+        const cleanDot = patch.projectDir.trim().replace(/^\/+|\/+$/g, "");
+        if (cleanDot) {
+          next.projectDir = cleanDot.startsWith(".") ? cleanDot : "." + cleanDot;
+        }
+      }
+      if (typeof patch.color === "string" && patch.color.trim()) {
+        next.color = patch.color;
+      }
+      if (patch.icon === null || patch.icon === "") {
+        delete next.icon;
+      } else if (isValidHarnessIconDataUrl(patch.icon)) {
+        next.icon = patch.icon;
+      }
+      return next;
+    });
+    set({ customHarnesses: nextCustom });
+    persistSettings(extract(get()));
   },
   removeCustomHarness(id) {
     const nextCustom = get().customHarnesses.filter((h) => h.id !== id);

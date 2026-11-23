@@ -1,361 +1,95 @@
-import { fixtureTree, makeSkill } from "./tree";
-import { translateDescription } from "./translator";
+import { invoke } from "@tauri-apps/api/core";
+import { unzipSync } from "fflate";
+import type { Skill } from "../types/workspace";
+import { encode } from "./tree";
 
 export type MarketplaceFeed = "all" | "trending" | "popular";
 
 export interface MarketplaceItem {
-  id: string;
+  key: string;
+  slug: string;
   name: string;
   source: string;
-  repoUrl: string;
-  skillPath: string;
-  description: string;
-  workflowStep: string;
+  repoUrl?: string;
+  url: string;
   installs: number;
-  weeklyRank: number;
-  popularRank: number;
-  glyph: string;
-  orgMark: string;
-  orgTone: "neutral" | "warm" | "cool" | "sage" | "plum";
 }
 
-export const marketplaceCatalog: MarketplaceItem[] = [
-  {
-    id: "find-skills",
-    name: "find-skills",
-    source: "@vercel-labs/skills",
-    repoUrl: "https://github.com/vercel-labs/skills",
-    skillPath: "skills/find-skills",
-    description:
-      "Discover and evaluate installable agent skills across the skills.sh ecosystem.",
-    workflowStep: "Search candidate skills and compare their scope.",
-    installs: 4_520_000,
-    weeklyRank: 2,
-    popularRank: 1,
-    glyph: "globe",
-    orgMark: "VL",
-    orgTone: "neutral",
-  },
-  {
-    id: "hyperframes-cli",
-    name: "hyperframes-cli",
-    source: "@heygen-com/hyperframes",
-    repoUrl: "https://github.com/heygen-com/hyperframes",
-    skillPath: "skills/hyperframes-cli",
-    description:
-      "Compose, preview and render programmatic motion frames with the Hyperframes CLI.",
-    workflowStep: "Inspect the timeline config before rendering.",
-    installs: 1_740_000,
-    weeklyRank: 1,
-    popularRank: 3,
-    glyph: "layout",
-    orgMark: "HG",
-    orgTone: "cool",
-  },
-  {
-    id: "agent-browser",
-    name: "agent-browser",
-    source: "@vercel-labs/agent-browser",
-    repoUrl: "https://github.com/vercel-labs/agent-browser",
-    skillPath: "skills/agent-browser",
-    description:
-      "Automate headless browser navigation, DOM inspection and visual regression checks.",
-    workflowStep: "Verify viewport layout and interactive elements.",
-    installs: 1_630_000,
-    weeklyRank: 4,
-    popularRank: 2,
-    glyph: "globe",
-    orgMark: "VL",
-    orgTone: "neutral",
-  },
-  {
-    id: "hyperframes",
-    name: "hyperframes",
-    source: "@heygen-com/hyperframes",
-    repoUrl: "https://github.com/heygen-com/hyperframes",
-    skillPath: "skills/hyperframes",
-    description:
-      "Author HTML/CSS animation scenes and synchronized audio tracks for web video.",
-    workflowStep: "Structure scene timing and cue transitions.",
-    installs: 1_610_000,
-    weeklyRank: 3,
-    popularRank: 5,
-    glyph: "layout",
-    orgMark: "HG",
-    orgTone: "cool",
-  },
-  {
-    id: "grill-me",
-    name: "grill-me",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/grill-me",
-    description:
-      "Stress-test feature specs and architecture trade-offs through focused interview questions.",
-    workflowStep: "Identify unresolved decisions and walk through each branch.",
-    installs: 1_580_000,
-    weeklyRank: 6,
-    popularRank: 4,
-    glyph: "review",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "design-mobile-apps",
-    name: "design-mobile-apps",
-    source: "@designed-by-ai/skills",
-    repoUrl: "https://github.com/designed-by-ai/skills",
-    skillPath: "skills/design-mobile-apps",
-    description:
-      "Design mobile screen flows, touch targets and navigation patterns for iOS and Android.",
-    workflowStep: "Check safe-area spacing and thumb reach zones.",
-    installs: 1_560_000,
-    weeklyRank: 5,
-    popularRank: 6,
-    glyph: "palette",
-    orgMark: "DA",
-    orgTone: "warm",
-  },
-  {
-    id: "media-use",
-    name: "media-use",
-    source: "@heygen-com/hyperframes",
-    repoUrl: "https://github.com/heygen-com/hyperframes",
-    skillPath: "skills/media-use",
-    description:
-      "Inspect, transcode and assemble image, audio and video assets in agent workflows.",
-    workflowStep: "Probe codec parameters before transforming assets.",
-    installs: 1_510_000,
-    weeklyRank: 8,
-    popularRank: 8,
-    glyph: "box",
-    orgMark: "HG",
-    orgTone: "cool",
-  },
-  {
-    id: "reddit-automation",
-    name: "reddit-automation",
-    source: "@flowkit-labs/skills",
-    repoUrl: "https://github.com/flowkit-labs/skills",
-    skillPath: "skills/reddit-automation",
-    description:
-      "Gather subreddit discussions, summarize recurring pain points and track launches.",
-    workflowStep: "Filter threads by signal and extract direct quotes.",
-    installs: 1_490_000,
-    weeklyRank: 11,
-    popularRank: 10,
-    glyph: "globe",
-    orgMark: "FK",
-    orgTone: "plum",
-  },
-  {
-    id: "hyperframes-registry",
-    name: "hyperframes-registry",
-    source: "@heygen-com/hyperframes",
-    repoUrl: "https://github.com/heygen-com/hyperframes",
-    skillPath: "skills/hyperframes-registry",
-    description:
-      "Resolve reusable motion templates, shaders and caption presets from the registry.",
-    workflowStep: "Match template aspect ratio to the target output.",
-    installs: 1_420_000,
-    weeklyRank: 9,
-    popularRank: 12,
-    glyph: "tag",
-    orgMark: "HG",
-    orgTone: "cool",
-  },
-  {
-    id: "grill-with-docs",
-    name: "grill-with-docs",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/grill-with-docs",
-    description:
-      "Cross-check implementation proposals against project documentation and constraints.",
-    workflowStep: "Compare proposal assumptions against canonical docs.",
-    installs: 1_390_000,
-    weeklyRank: 10,
-    popularRank: 11,
-    glyph: "doc",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "improve-codebase-architecture",
-    name: "improve-codebase-architecture",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/improve-codebase-architecture",
-    description:
-      "Identify module coupling, boundary leaks and pragmatic refactoring steps.",
-    workflowStep: "Map module dependencies before extracting boundaries.",
-    installs: 1_330_000,
-    weeklyRank: 7,
-    popularRank: 9,
-    glyph: "branch",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "tdd",
-    name: "tdd",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/tdd",
-    description:
-      "Drive feature development through red-green-refactor cycles with behavior-focused tests.",
-    workflowStep: "Write one failing behavior assertion before editing code.",
-    installs: 1_290_000,
-    weeklyRank: 12,
-    popularRank: 7,
-    glyph: "flask",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "frontend-design",
-    name: "frontend-design",
-    source: "@anthropics/skills",
-    repoUrl: "https://github.com/anthropics/skills",
-    skillPath: "skills/frontend-design",
-    description:
-      "Build polished, accessible interfaces with deliberate typography and spacing.",
-    workflowStep: "Inspect the visual hierarchy.",
-    installs: 1_240_000,
-    weeklyRank: 13,
-    popularRank: 13,
-    glyph: "layout",
-    orgMark: "AN",
-    orgTone: "neutral",
-  },
-  {
-    id: "handoff",
-    name: "handoff",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/handoff",
-    description:
-      "Generate crisp session handoff notes capturing state, decisions and next actions.",
-    workflowStep: "Summarize verified state and open follow-ups.",
-    installs: 1_210_000,
-    weeklyRank: 15,
-    popularRank: 14,
-    glyph: "doc",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "prototype",
-    name: "prototype",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/prototype",
-    description:
-      "Rapidly build clickable UI prototypes to validate interaction flows before backend work.",
-    workflowStep: "Focus on real state transitions and edge cases.",
-    installs: 1_160_000,
-    weeklyRank: 14,
-    popularRank: 16,
-    glyph: "layout",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "triage",
-    name: "triage",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/triage",
-    description:
-      "Reproduce bug reports, narrow root causes and classify severity systematically.",
-    workflowStep: "Capture a minimal reproduction before proposing fixes.",
-    installs: 1_130_000,
-    weeklyRank: 18,
-    popularRank: 17,
-    glyph: "review",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-  {
-    id: "ui-taste",
-    name: "ui-taste",
-    source: "@uizze.sh/skills",
-    repoUrl: "https://github.com/uizze/skills",
-    skillPath: "skills/ui-taste",
-    description:
-      "Audit spacing, visual rhythm, contrast and micro-interaction polish in web apps.",
-    workflowStep: "Review elevation hierarchy and interactive states.",
-    installs: 1_110_000,
-    weeklyRank: 16,
-    popularRank: 15,
-    glyph: "palette",
-    orgMark: "UI",
-    orgTone: "sage",
-  },
-  {
-    id: "ai-video-generation",
-    name: "ai-video-generation",
-    source: "@101-skills/superpowers",
-    repoUrl: "https://github.com/101-skills/superpowers",
-    skillPath: "skills/ai-video-generation",
-    description:
-      "Structure prompts, camera motion cues and shot consistency for AI video pipelines.",
-    workflowStep: "Define shot list and continuity constraints.",
-    installs: 1_080_000,
-    weeklyRank: 17,
-    popularRank: 18,
-    glyph: "speed",
-    orgMark: "10",
-    orgTone: "sage",
-  },
-  {
-    id: "browser-testing",
-    name: "browser-testing",
-    source: "@microsoft/playwright-tools",
-    repoUrl: "https://github.com/microsoft/playwright-tools",
-    skillPath: "skills/browser-testing",
-    description:
-      "Exercise browser workflows and capture reproducible failures.",
-    workflowStep: "Select a representative user journey.",
-    installs: 980_000,
-    weeklyRank: 19,
-    popularRank: 19,
-    glyph: "globe",
-    orgMark: "MS",
-    orgTone: "cool",
-  },
-  {
-    id: "pdf-toolkit",
-    name: "pdf-toolkit",
-    source: "@anthropics/skills",
-    repoUrl: "https://github.com/anthropics/skills",
-    skillPath: "skills/pdf-toolkit",
-    description: "Inspect PDF pages, extract tables and assemble documents.",
-    workflowStep: "Check the document dimensions.",
-    installs: 940_000,
-    weeklyRank: 21,
-    popularRank: 20,
-    glyph: "pdf",
-    orgMark: "AN",
-    orgTone: "neutral",
-  },
-  {
-    id: "domain-modeling",
-    name: "domain-modeling",
-    source: "@mattpocock/skills",
-    repoUrl: "https://github.com/mattpocock/skills",
-    skillPath: "skills/domain-modeling",
-    description:
-      "Encode invariants and illegal-state prevention into clean TypeScript domain types.",
-    workflowStep: "Express state transitions as discriminated unions.",
-    installs: 890_000,
-    weeklyRank: 20,
-    popularRank: 21,
-    glyph: "braces",
-    orgMark: "MP",
-    orgTone: "warm",
-  },
-];
+interface MarketplacePage {
+  items: MarketplaceItem[];
+  total?: number;
+  hasMore: boolean;
+}
+
+const feeds = { all: "all-time", trending: "trending", popular: "hot" };
+const cache = new Map<string, { at: number; result: MarketplacePage }>();
+const githubRepo = /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/i;
+
+export async function loadMarketplace(
+  feed: MarketplaceFeed,
+  page: number,
+  query: string,
+  signal: AbortSignal,
+): Promise<MarketplacePage> {
+  const view = feeds[feed];
+  const key = JSON.stringify(query ? [query] : [view, page]);
+  const saved = cache.get(key);
+  if (saved && Date.now() - saved.at < 300_000) return saved.result;
+  const params = new URLSearchParams({ q: query, limit: "80" });
+  const endpoint = query ? `search?${params}` : `skills/${view}/${page}`;
+  const response =
+    "__TAURI_INTERNALS__" in window
+      ? await invoke<unknown>("marketplace_feed", { view, page, query })
+      : await fetch(`/marketplace-api/${endpoint}`, {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
+        }).then((res) => {
+          if (!res.ok) throw Error("marketUnavailable");
+          return res.json();
+        });
+  const data = response as {
+    skills?: unknown[];
+    total?: number;
+    hasMore?: boolean;
+  };
+  if (!Array.isArray(data.skills)) throw Error("marketUnavailable");
+  const items = new Map<string, MarketplaceItem>();
+  for (const entry of data.skills) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (
+      typeof row.source !== "string" ||
+      typeof row.name !== "string" ||
+      typeof row.installs !== "number"
+    )
+      continue;
+    const slug = row.skillId ?? row.name;
+    if (typeof slug !== "string" || !slug.trim()) continue;
+    const source = row.source;
+    const id = `${source}/${slug}`;
+    const repoUrl =
+      githubRepo.test(source) && !/\/\.{1,2}$/.test(source)
+        ? `https://github.com/${source}`
+        : undefined;
+    const url = `https://skills.sh/${source.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(slug)}`;
+    items.set(id, {
+      key: id,
+      slug,
+      name: row.name,
+      source,
+      url,
+      repoUrl,
+      installs: row.installs,
+    });
+  }
+  const result = {
+    items: [...items.values()],
+    total: data.total,
+    hasMore: !query && !!data.hasMore,
+  };
+  if (cache.size >= 48) cache.clear();
+  cache.set(key, { at: Date.now(), result });
+  return result;
+}
 
 export function formatInstalls(n: number): string {
   if (n >= 1_000_000)
@@ -364,55 +98,129 @@ export function formatInstalls(n: number): string {
   return String(n);
 }
 
-const GITHUB_AVATARS: Record<string, string> = {
-  "vercel-labs": "/avatars/vercel-labs.png",
-  "heygen-com": "/avatars/heygen-com.png",
-  mattpocock: "/avatars/mattpocock.png",
-  anthropics: "/avatars/anthropics.png",
-  microsoft: "/avatars/microsoft.png",
-  "designed-by-ai": "/avatars/designed-by-ai.svg",
-  "flowkit-labs": "/avatars/flowkit-labs.svg",
-  uizze: "/avatars/uizze.svg",
-  "101-skills": "/avatars/101-skills.svg",
-};
+export function githubAvatarUrl(repoUrl?: string): string | undefined {
+  if (!repoUrl) return undefined;
+  const owner = repoUrl.match(
+    /^https?:\/\/github\.com\/([a-z0-9][a-z0-9-]*)\//i,
+  )?.[1];
+  if (!owner) return undefined;
+  if (
+    [
+      "vercel-labs",
+      "heygen-com",
+      "mattpocock",
+      "anthropics",
+      "microsoft",
+    ].includes(owner.toLowerCase())
+  ) {
+    return `/avatars/${owner.toLowerCase()}.png`;
+  }
+  return `https://github.com/${owner}.png?size=64`;
+}
 
-export function githubAvatarUrl(repoUrl: string): string | undefined {
-  const m = repoUrl.match(/github\.com\/([^/]+)/i);
-  if (!m) return undefined;
-  const owner = m[1];
+export function marketplaceMember(
+  item: MarketplaceItem,
+  skills: Skill[],
+): Skill | undefined {
+  const slug = item.slug.toLowerCase();
+  const candidates = skills.filter(
+    (s) =>
+      s.source.type === "git" &&
+      s.source.repoUrl
+        .replace(/(?:\.git)?\/+$/, "")
+        .replace(/\.git$/, "")
+        .toLowerCase() === item.repoUrl?.toLowerCase(),
+  );
+  const byPath = candidates.filter(
+    (s) =>
+      s.source.type === "git" &&
+      s.source.skillPath.split("/").at(-1)?.toLowerCase() === slug,
+  );
+  if (byPath.length === 1) return byPath[0];
+  const byName = candidates.filter(
+    (s) => s.id === slug || s.name.toLowerCase() === item.name.toLowerCase(),
+  );
+  return byName.length === 1 ? byName[0] : undefined;
+}
+
+const repoCache = new Map<string, Promise<{ skills: Skill[] }>>();
+
+export function isMarketplacePlaceholder(skill: Skill): boolean {
   return (
-    GITHUB_AVATARS[owner.toLowerCase()] ??
-    `https://github.com/${owner}.png?size=64`
+    skill.source.type === "git" &&
+    skill.source.commit === skill.centralHash.slice(0, 40) &&
+    Object.keys(skill.files).length === 2 &&
+    !!skill.files["references/checklist.md"] &&
+    skill.skillMdPreview.endsWith(
+      "2. Review the result with the project owner.",
+    )
   );
 }
 
-export function marketplaceSources(
-  items: MarketplaceItem[] = marketplaceCatalog,
-) {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    counts.set(item.source, (counts.get(item.source) ?? 0) + item.installs);
+export async function loadMarketplaceRepo(
+  item: MarketplaceItem,
+  inspectGit: (url: string) => Promise<{ skills: Skill[] }>,
+): Promise<Skill> {
+  const repo = item.repoUrl;
+  if (!repo) throw Error("marketExternalSource");
+  let pending = repoCache.get(repo);
+  if (!pending) {
+    pending =
+      "__TAURI_INTERNALS__" in window
+        ? inspectGit(repo)
+        : inspectBrowserRepository(repo, item.source);
+    const request = pending;
+    repoCache.set(repo, request);
+    const expire = () => {
+      if (repoCache.get(repo) === request) repoCache.delete(repo);
+    };
+    void request.then(() => window.setTimeout(expire, 60_000), expire);
   }
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([source]) => source);
+  const member = marketplaceMember(item, (await pending).skills);
+  if (!member) throw Error("marketSkillMissing");
+  return member;
 }
 
-export async function buildMarketplaceSkill(item: MarketplaceItem) {
-  const skill = await makeSkill(
-    fixtureTree(item.name, item.description, item.workflowStep),
-    {
-      type: "git",
-      repoUrl: item.repoUrl,
-      ref: "main",
-      commit: "",
-      skillPath: item.skillPath,
+async function inspectBrowserRepository(repoUrl: string, source: string) {
+  const signal = AbortSignal.timeout(20_000);
+  const headers = { Accept: "application/vnd.github+json" };
+  const [repo, commit] = await Promise.all([
+    fetch(`https://api.github.com/repos/${source}`, { headers, signal }),
+    fetch(`https://api.github.com/repos/${source}/commits/HEAD`, {
+      headers,
+      signal,
+    }),
+  ]);
+  if (!repo.ok || !commit.ok) throw Error("marketRepoUnavailable");
+  const { default_branch: ref } = await repo.json();
+  const { sha } = await commit.json();
+  if (typeof ref !== "string" || !/^[a-f0-9]{40}$/.test(sha))
+    throw Error("marketRepoUnavailable");
+  const response = await fetch(`/marketplace-archive/${source}/zip/${sha}`, {
+    signal,
+  });
+  if (!response.ok) throw Error("marketRepoUnavailable");
+  let totalBytes = 0;
+  const archive = unzipSync(new Uint8Array(await response.arrayBuffer()), {
+    filter: ({ name, originalSize }) => {
+      if (name.endsWith("/") || name.includes("/node_modules/")) return false;
+      totalBytes += originalSize;
+      if (totalBytes > 32 * 1024 * 1024) throw Error("marketRepoUnavailable");
+      return true;
     },
-    item.glyph,
+  });
+  const entries = Object.fromEntries(
+    Object.entries(archive).map(([name, bytes]) => [
+      name.slice(name.indexOf("/") + 1),
+      encode(bytes),
+    ]),
   );
-  skill.descriptionZh = translateDescription(item.name, item.description);
-  if (skill.source.type === "git") {
-    skill.source.commit = skill.centralHash.slice(0, 40);
+  const { importTrees } = await import("./archive");
+  const { skills } = await importTrees(entries, true);
+  for (const skill of skills) {
+    const skillPath =
+      skill.source.type === "local" ? skill.source.originPath || "." : ".";
+    skill.source = { type: "git", repoUrl, ref, commit: sha, skillPath };
   }
-  return skill;
+  return { skills };
 }

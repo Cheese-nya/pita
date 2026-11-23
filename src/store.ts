@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { pitaClient } from "./services/pitaClient";
 import type { Command } from "./services/commands";
 import { location, type Workspace } from "./types/workspace";
+import type { AgentId } from "./types/domain";
 export type Receipt = {
   key: string;
   detail: string;
@@ -14,16 +15,29 @@ interface Store {
   loadError: boolean;
   receipt?: Receipt;
   progress: string;
+  installedAgents?: AgentId[];
+  detectAgents(): Promise<void>;
   load(): Promise<void>;
   run(c: Command, key: string, detail?: string): Promise<boolean>;
   undo(): Promise<void>;
   resetDemo(): Promise<boolean>;
   notify(r?: Receipt): void;
 }
+let detection = 0;
 export const usePita = create<Store>((set, get) => ({
   busy: false,
   loadError: false,
   progress: "",
+  async detectAgents() {
+    if (!pitaClient.detectInstalledAgents) return;
+    const id = ++detection;
+    try {
+      const installedAgents = await pitaClient.detectInstalledAgents();
+      if (id === detection) set({ installedAgents });
+    } catch {
+      if (id === detection) set({ installedAgents: undefined });
+    }
+  },
   async load() {
     set({ busy: true, loadError: false });
     try {

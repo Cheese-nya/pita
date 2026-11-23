@@ -422,6 +422,69 @@ impl WorkspaceEngine {
         let _ = remove_path_safe(&staged_dir);
     }
 
+    fn remove_scoped_copy(
+        root: &Path,
+        projects: &[ProjectWorkspace],
+        ctx: &RuntimeContext,
+        id: &str,
+        scope: &ScopeTarget,
+        agent: &AgentId,
+    ) -> Result<(), PitaError> {
+        let bases = match scope {
+            ScopeTarget::GlobalAgent { .. } => global_skill_dirs(agent, ctx),
+            ScopeTarget::Project { project_id } => {
+                let project = projects
+                    .iter()
+                    .find(|p| p.id == *project_id)
+                    .ok_or(PitaError::Missing)?;
+                project_skill_dirs(&expand_tilde(&project.path), agent, ctx)
+            }
+        };
+        for base in bases {
+            let Ok(real_base) = fs::canonicalize(&base) else {
+                continue;
+            };
+            for dir in discover_skill_dirs(&base) {
+                if dir != base
+                    && !dir
+                        .parent()
+                        .and_then(|parent| parent.canonicalize().ok())
+                        .is_some_and(|parent| parent.starts_with(&real_base))
+                {
+                    continue;
+                }
+                let Ok(md) = fs::read(dir.join("SKILL.md")) else {
+                    continue;
+                };
+                let files = Files::from([("SKILL.md".into(), crate::tree::encode_bytes(&md))]);
+                let Ok(meta) = parse_skill_meta(&files) else {
+                    continue;
+                };
+                if normalize_skill_id(&meta.name) != id {
+                    continue;
+                }
+                if dir == base {
+                    remove_path_safe(&dir.join("SKILL.md"))?;
+                } else {
+                    remove_path_safe(&dir)?;
+                }
+                if matches!(agent, AgentId::Codex)
+                    && uses_native_disable(agent, scope, projects)
+                    && read_codex_skill_disabled(scope, projects, &dir)
+                {
+                    set_codex_skill_enabled(scope, projects, &dir, true)?;
+                }
+            }
+        }
+        if matches!(agent, AgentId::ClaudeCode)
+            && uses_native_disable(agent, scope, projects)
+            && read_claude_skill_disabled(scope, projects, id)
+        {
+            set_claude_skill_enabled(scope, projects, id, true)?;
+        }
+        remove_path_safe(&staging_skill_dir(root, scope, agent, id))
+    }
+
     fn reconcile_disk_between(
         root_dir: &Path,
         from: &Workspace,
@@ -927,15 +990,15 @@ impl WorkspaceEngine {
                         .position(|d| d.scope == target && d.agent_id == agent)
                         .ok_or(PitaError::Missing)?;
                     if action == "remove" {
-                        s.deployments.remove(pos);
-                        Self::remove_deployment_from_disk(
+                        Self::remove_scoped_copy(
                             root_dir,
                             &projects_snapshot,
                             ctx,
                             &id,
                             &target,
                             &agent,
-                        );
+                        )?;
+                        s.deployments.remove(pos);
                     } else {
                         let status = if uses_native_disable(&agent, &target, &projects_snapshot) {
                             crate::domain::DeploymentStatus::DisabledNative
@@ -997,14 +1060,14 @@ impl WorkspaceEngine {
                             let mut kept = Vec::with_capacity(s.deployments.len());
                             for d in s.deployments.drain(..) {
                                 if d.scope == *target {
-                                    Self::remove_deployment_from_disk(
+                                    Self::remove_scoped_copy(
                                         root_dir,
                                         &projects_snapshot,
                                         ctx,
                                         &s.id,
                                         &d.scope,
                                         &d.agent_id,
-                                    );
+                                    )?;
                                 } else {
                                     kept.push(d);
                                 }
@@ -1133,34 +1196,20 @@ impl WorkspaceEngine {
                     .iter_mut()
                     .find(|s| s.id == id)
                     .ok_or(PitaError::Missing)?;
-                match text {
-                    Some(t) => {
-                        let trimmed = t.trim().to_string();
-                        if trimmed.is_empty() {
-                            s.description_zh = None;
-                        } else {
-                            s.description_zh = Some(trimmed);
-                        }
-                    }
-                    None => {
-                        if s.description_zh.as_deref().unwrap_or("").trim().is_empty() {
-                            s.description_zh = Some(fallback_zh(&s.name, &s.description));
-                        }
-                    }
+                if let Some(text) = text {
+                    let text = text.trim();
+                    s.description_zh = (!text.is_empty()).then(|| text.to_owned());
                 }
             }
 
-            Command::TranslateAllSkills { ids } => {
-                let target_ids: Option<HashSet<String>> =
-                    ids.filter(|v| !v.is_empty()).map(|v| v.into_iter().collect());
-                for s in &mut ws.skills {
-                    if let Some(set) = &target_ids {
-                        if !set.contains(&s.id) {
-                            continue;
-                        }
-                    }
-                    if s.description_zh.as_deref().unwrap_or("").trim().is_empty() {
-                        s.description_zh = Some(fallback_zh(&s.name, &s.description));
+            Command::SaveTranslations { entries } => {
+                for item in entries {
+                    if let Some(skill) = ws
+                        .skills
+                        .iter_mut()
+                        .find(|s| s.id == item.id && s.description == item.description)
+                    {
+                        skill.description_zh = Some(item.text);
                     }
                 }
             }
@@ -1686,6 +1735,69 @@ impl WorkspaceEngine {
                 }
             }
 
+            Command::RepairMarketplace {
+                skill,
+                hash,
+                targets,
+            } => {
+                let targets = targets
+                    .into_iter()
+                    .map(|target| {
+                        let agents = scope_agents(ws, &target);
+                        if agents.is_empty() {
+                            return Err(PitaError::ChooseProjectAgents);
+                        }
+                        Ok((target, agents))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let entry = ws
+                    .skills
+                    .iter_mut()
+                    .find(|s| s.id == skill.id)
+                    .ok_or(PitaError::Missing)?;
+                let same_source = matches!((&entry.source, &skill.source),
+                    (SkillSource::Git { repo_url: a, commit, .. }, SkillSource::Git { repo_url: b, .. })
+                    if a.trim_end_matches('/').trim_end_matches(".git").eq_ignore_ascii_case(b)
+                        && Some(commit.as_str()) == entry.central_hash.get(..40));
+                if entry.central_hash != hash
+                    || !same_source
+                    || entry.files.len() != 2
+                    || !entry.files.contains_key("references/checklist.md")
+                    || !entry
+                        .skill_md_preview
+                        .ends_with("2. Review the result with the project owner.")
+                {
+                    return Err(PitaError::WorkspaceChanged);
+                }
+                let sha = hash_tree(&skill.files);
+                Self::replace_central(root_dir, &projects_snapshot, ctx, entry, skill.files, sha)?;
+                entry.source = skill.source;
+                entry.has_update = false;
+                entry.upstream = None;
+                entry.update_summary = None;
+                entry.check_error = None;
+                for (target, agents) in targets {
+                    for agent in agents {
+                        let enabled = entry.deployments.iter().any(|d| {
+                            d.scope == target
+                                && d.agent_id == agent
+                                && d.status == crate::domain::DeploymentStatus::Enabled
+                        });
+                        if !enabled {
+                            Self::deploy_one(
+                                root_dir,
+                                &projects_snapshot,
+                                ctx,
+                                entry,
+                                &target,
+                                agent,
+                                true,
+                                true,
+                            )?;
+                        }
+                    }
+                }
+            }
             Command::Add {
                 skills,
                 targets,
@@ -1718,10 +1830,7 @@ impl WorkspaceEngine {
                 }
 
                 let mut deploy_ids = Vec::new();
-                for mut s in skills {
-                    if s.description_zh.as_deref().unwrap_or("").trim().is_empty() {
-                        s.description_zh = Some(fallback_zh(&s.name, &s.description));
-                    }
+                for s in skills {
                     Self::write_central(root_dir, &s)?;
                     deploy_ids.push(s.id.clone());
                     ws.skills.push(s);
@@ -1904,17 +2013,6 @@ fn dedup_preserve(items: Vec<String>) -> Vec<String> {
         }
     }
     out
-}
-
-fn fallback_zh(name: &str, description: &str) -> String {
-    let trimmed = description.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if trimmed.chars().any(|c| ('\u{3400}'..='\u{9FFF}').contains(&c)) {
-        return trimmed.to_string();
-    }
-    format!("提供「{}」相关能力：{}", name, trimmed)
 }
 
 #[cfg(test)]
@@ -2604,6 +2702,128 @@ mod tests {
         let ws = engine.current_workspace().unwrap();
         assert!(ws.remote.as_ref().unwrap().backed_at.is_none());
         assert!(ws.remote.as_ref().unwrap().commit.is_none());
+    }
+
+    #[test]
+    fn replacing_a_marketplace_placeholder_keeps_its_deployment() {
+        let temp = tempfile::tempdir().unwrap();
+        let central = temp.path().join("pita");
+        let target_dir = temp.path().join("antigravity");
+        let engine = WorkspaceEngine::open_in_dir(central).unwrap();
+        let agent = AgentId::Antigravity;
+        let target = ScopeTarget::GlobalAgent {
+            agent_id: agent.clone(),
+        };
+        let ctx = RuntimeContext {
+            enabled_agents: vec![agent.clone()],
+            custom_paths: HashMap::from([(agent, target_dir.display().to_string())]),
+            custom_harnesses: vec![],
+        };
+        let repo_url = "https://github.com/example/skills";
+        let source = |commit| SkillSource::Git {
+            repo_url: repo_url.into(),
+            git_ref: "main".into(),
+            commit,
+            skill_path: "skills/demo".into(),
+        };
+        let mut example = sample_skill("demo", "2. Review the result with the project owner.");
+        example.files.insert(
+            "references/checklist.md".into(),
+            encode_b64(b"- Confirm scope\n- Review changes\n"),
+        );
+        let old_hash = hash_tree(&example.files);
+        let placeholder = make_skill(example.files, source(old_hash[..40].into()), None).unwrap();
+        engine
+            .execute(
+                Command::Add {
+                    skills: vec![placeholder],
+                    targets: vec![target.clone()],
+                    reuse: None,
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+
+        let actual = make_skill(
+            sample_skill("demo", "Upstream instructions").files,
+            source("a".repeat(40)),
+            None,
+        )
+        .unwrap();
+        let actual_hash = actual.central_hash.clone();
+        let repaired = engine
+            .execute(
+                Command::RepairMarketplace {
+                    skill: Box::new(actual),
+                    hash: old_hash,
+                    targets: vec![target],
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(repaired.skills[0].central_hash, actual_hash);
+        assert_eq!(repaired.skills[0].deployments.len(), 1);
+        assert_eq!(
+            hash_tree(&read_dir_tree(&target_dir.join("demo")).unwrap()),
+            actual_hash
+        );
+    }
+
+    #[test]
+    fn removing_scoped_skill_removes_discovered_copy_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let central = temp.path().join("pita");
+        let present = temp.path().join("antigravity");
+        let other = temp.path().join("pi");
+        let ctx = RuntimeContext {
+            enabled_agents: vec![AgentId::Antigravity, AgentId::Pi],
+            custom_paths: HashMap::from([
+                (AgentId::Antigravity, present.display().to_string()),
+                (AgentId::Pi, other.display().to_string()),
+            ]),
+            custom_harnesses: vec![],
+        };
+        assert!(!crate::adapters::agent_is_present(
+            &AgentId::Antigravity,
+            &ctx
+        ));
+
+        let skill = sample_skill("shared-skill", "shared documentation");
+        let nested = present.join("group/different-folder-name");
+        let other_copy = other.join("shared-skill");
+        write_dir_tree_atomic(&nested, &skill.files).unwrap();
+        write_dir_tree_atomic(&other_copy, &skill.files).unwrap();
+        assert!(crate::adapters::agent_is_present(
+            &AgentId::Antigravity,
+            &ctx
+        ));
+
+        let engine = WorkspaceEngine::open_in_dir(central.clone()).unwrap();
+        let target = ScopeTarget::GlobalAgent {
+            agent_id: AgentId::Antigravity,
+        };
+        assert_eq!(engine.load(&ctx).unwrap().skills[0].deployments.len(), 2);
+
+        engine
+            .execute(
+                Command::Deploy {
+                    id: skill.id.clone(),
+                    target,
+                    agent: AgentId::Antigravity,
+                    action: "remove".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        let rescanned = engine.execute(Command::Scan, &ctx, |_| {}).unwrap();
+        assert_eq!(rescanned.skills[0].deployments.len(), 1);
+        assert_eq!(rescanned.skills[0].deployments[0].agent_id, AgentId::Pi);
+        assert!(!nested.exists());
+        assert!(other_copy.join("SKILL.md").is_file());
+        assert!(central.join("skills/shared-skill/SKILL.md").is_file());
     }
 
     #[test]

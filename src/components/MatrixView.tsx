@@ -54,7 +54,7 @@ export function MatrixView({
 }) {
   const { t } = useTranslation();
   const w = useWorkspace();
-  const { run, busy } = usePita();
+  const { run, busy, installedAgents } = usePita();
   const enabledAgents = useSettings((s) => s.enabledAgents);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
   const tokenBudgetLimit = useSettings((s) => s.tokenBudgetLimit);
@@ -309,6 +309,20 @@ export function MatrixView({
                   {agentIds.map((a) => {
                     const scope = target ?? globalTarget(a);
                     const copy = copies(s, scope).find((d) => d.agentId === a);
+                    if (
+                      !copy &&
+                      installedAgents &&
+                      !installedAgents.includes(a)
+                    ) {
+                      const label = `${t(a)} · ${t("agentNotInstalled")}`;
+                      return (
+                        <td className="matrix-agent-cell" key={a}>
+                          <span title={label} aria-label={label}>
+                            —
+                          </span>
+                        </td>
+                      );
+                    }
                     const status = copy?.status ?? "absent";
                     const drifted = !!copy?.drifted;
                     const cellKey = s.id + ":" + a;

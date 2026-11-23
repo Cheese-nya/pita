@@ -15,6 +15,7 @@ import {
 } from "../types/workspace";
 import { meta, gitUrl, hash } from "./tree";
 import { translateDescription, translateDescriptionAsync } from "./translator";
+import { isMarketplacePlaceholder } from "./marketplace";
 export type Command =
   | {
       type: "deploy";
@@ -38,7 +39,10 @@ export type Command =
   | { type: "bulkDelete"; ids: string[] }
   | { type: "source"; id: string; url: string }
   | { type: "translateSkill"; id: string; text?: string }
-  | { type: "translateAllSkills"; ids?: string[] }
+  | {
+      type: "saveTranslations";
+      entries: { id: string; description: string; text: string }[];
+    }
   | {
       type: "drift";
       id: string;
@@ -47,6 +51,12 @@ export type Command =
       direction: "central" | "copy";
     }
   | { type: "update"; ids: string[] }
+  | {
+      type: "repairMarketplace";
+      skill: Skill;
+      hash: string;
+      targets: ScopeTarget[];
+    }
   | { type: "rollback"; id: string }
   | { type: "bind" | "unbind" | "sync"; id: string; target: ScopeTarget }
   | {
@@ -290,13 +300,12 @@ export async function apply(w: Workspace, c: Command) {
       else delete s.descriptionZh;
       break;
     }
-    case "translateAllSkills": {
-      const targets = c.ids?.length ? c.ids.map(get) : w.skills;
-      for (const s of targets) {
-        if (!s.descriptionZh?.trim()) {
-          const res = await translateDescriptionAsync(s.name, s.description);
-          s.descriptionZh = res.text;
-        }
+    case "saveTranslations": {
+      for (const item of c.entries) {
+        const skill = w.skills.find(
+          (s) => s.id === item.id && s.description === item.description,
+        );
+        if (skill) skill.descriptionZh = item.text;
       }
       break;
     }
@@ -331,6 +340,24 @@ export async function apply(w: Workspace, c: Command) {
         d.installedHash = s.centralHash;
         d.drifted = false;
         delete d.files;
+      }
+      break;
+    }
+    case "repairMarketplace": {
+      const s = get(c.skill.id);
+      if (s.centralHash !== c.hash || !isMarketplacePlaceholder(s))
+        throw Error("workspaceChanged");
+      if (c.targets.some((target) => !scopeAgents(w, target).length))
+        throw Error("chooseProjectAgents");
+      replaceCentral(s, c.skill.files, await hash(c.skill.files));
+      s.source = c.skill.source;
+      s.hasUpdate = false;
+      delete s.upstream;
+      delete s.updateSummary;
+      delete s.checkError;
+      for (const target of c.targets) {
+        for (const agent of scopeAgents(w, target))
+          deploy(s, target, agent, true);
       }
       break;
     }

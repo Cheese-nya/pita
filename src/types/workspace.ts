@@ -9,6 +9,9 @@ import type {
   ScopeTarget,
 } from "./domain";
 import { ALL_AGENT_IDS, getSettings } from "../services/settings";
+import { Tiktoken } from "js-tiktoken/lite";
+import tokenRanks from "js-tiktoken/ranks/cl100k_base";
+import { meta } from "../services/tree";
 export const agents: BuiltinAgentId[] = ALL_AGENT_IDS;
 export function allAgents(): AgentId[] {
   return [
@@ -175,20 +178,35 @@ export interface Workspace {
     commit?: string;
   } | null;
 }
-const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]/g;
+let tokenizer: Tiktoken | undefined;
+const metadataTokens = new Map<string, number>();
 
 export function estimateTokens(text: string): number {
-  const trimmed = text.trim();
-  if (!trimmed) return 0;
-  const cjk = (trimmed.match(CJK_RE) ?? []).length;
-  const other = Array.from(trimmed).length - cjk;
-  return Math.max(1, Math.ceil(cjk / 1.5 + other / 4));
+  tokenizer ??= new Tiktoken(tokenRanks);
+  return tokenizer.encode(text, [], []).length;
 }
 
 export function skillTokens(
   s: Pick<SkillRecord, "name" | "description">,
 ): number {
-  return estimateTokens(s.name) + estimateTokens(s.description) + 12;
+  const text = `${s.name}\n${s.description}`;
+  const cached = metadataTokens.get(text);
+  if (cached !== undefined) return cached;
+  const count = estimateTokens(text);
+  if (metadataTokens.size >= 4096) metadataTokens.clear();
+  metadataTokens.set(text, count);
+  return count;
+}
+
+export function deployedSkillTokens(s: Skill, copy?: Copy): number {
+  if (copy?.files) {
+    try {
+      return skillTokens(meta(copy.files));
+    } catch {
+      // A broken external frontmatter leaves central metadata as the estimate.
+    }
+  }
+  return skillTokens(s);
 }
 
 export function presetTokens(
@@ -218,12 +236,11 @@ export function agentEnabledTokens(
   let tokens = 0;
   let count = 0;
   for (const s of w.skills) {
-    if (
-      copies(s, scope).some(
-        (d) => d.agentId === agentId && d.status === "enabled",
-      )
-    ) {
-      tokens += skillTokens(s);
+    const copy = copies(s, scope).find(
+      (d) => d.agentId === agentId && d.status === "enabled",
+    );
+    if (copy) {
+      tokens += deployedSkillTokens(s, copy);
       count += 1;
     }
   }

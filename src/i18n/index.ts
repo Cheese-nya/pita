@@ -2,6 +2,65 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 // Each entry supplies both languages. Skill documents and user-assigned names retain their original text.
 const messages: Record<string, [string, string]> = {
+  addAgent: ["添加 Agent", "Add agent"],
+  agentNotInstalled: ["暂未安装", "Agent not installed"],
+  removeModifiedCopy: [
+    "此处包含修改过或受 Git 跟踪的文件。移除会删除该副本。",
+    "This copy contains modified or Git-tracked files. Removing it deletes those files.",
+  ],
+  removeFromScope: ["从 {{name}} 移除", "Remove from {{name}}"],
+  deleteFromLibrary: ["从中央库删除", "Delete from central library"],
+  notCheckedYet: ["尚未检查更新", "No update check yet"],
+  marketLoading: ["正在加载 skills.sh…", "Loading skills.sh…"],
+  marketUnavailable: ["暂时无法连接 skills.sh。", "Could not reach skills.sh."],
+  marketRepoUnavailable: [
+    "暂时无法读取 GitHub 仓库。",
+    "Could not read the GitHub repository.",
+  ],
+  marketSkillMissing: [
+    "仓库中找不到匹配的 Skill。",
+    "No matching skill found in the repository.",
+  ],
+  marketMinQuery: [
+    "输入至少 2 个字符搜索市场。",
+    "Enter at least 2 characters to search.",
+  ],
+  marketMore: ["加载更多", "Load more"],
+  marketRepair: ["换成仓库原版", "Replace with repository files"],
+  marketExternalSource: [
+    "此条目由外部站点提供，可前往 skills.sh 查看安装方式。",
+    "This skill is hosted externally. Open skills.sh for installation instructions.",
+  ],
+  reportBug: ["报告错误", "Report a bug"],
+  personalWebsite: ["作者官网", "Author website"],
+  guideAddSkills: [
+    "从 skills.sh、Git 仓库或本地目录安装 Skill，也可扫描本机已有的 Skills。",
+    "Install from skills.sh, a Git repository, or a local folder, or scan for existing skills.",
+  ],
+  guideManageCopies: [
+    "在 Agent 页面启停 Skill，或从详情移除该 Agent 的副本。",
+    "Enable or pause skills on an agent page, or remove its copy from skill details.",
+  ],
+  guideSyncSkills: [
+    "用活预设同步一组 Skills，在更新中心检查上游版本。",
+    "Sync groups of skills with live presets and check upstream versions in the Update Center.",
+  ],
+  noSkillTranslation: ["暂无中文译文", "No Chinese translation"],
+  translationUnavailable: [
+    "暂时无法生成译文。可以重试或手动编辑。",
+    "Could not translate the description. Try again or edit it manually.",
+  ],
+  translateWithGoogle: ["用 Google 翻译", "Translate with Google"],
+  translatedSomeReceipt: ["已保存可用译文", "Saved available translations"],
+  translationFailedCount: [
+    "{{n}} 条翻译失败",
+    "{{n}} descriptions could not be translated",
+  ],
+  fullSkillTokens: ["SKILL.md 全文估算", "Full SKILL.md estimate"],
+  tokenEstimateMethod: [
+    "使用 cl100k_base 分词。本项按名称和原始描述估算，全文是 Skill 被调用时可能读取的内容。Agent 实际计数取决于模型和加载方式。",
+    "Uses the cl100k_base tokenizer. The metadata estimate covers the name and original description. The full file may load when the skill is invoked. Agents use their own tokenizers and loading rules.",
+  ],
   collapseNav: ["收起侧栏", "Collapse sidebar"],
   expandNav: ["展开侧栏", "Expand sidebar"],
   pendingUpdates: ["{{n}} 个可用更新", "{{n}} available updates"],
@@ -75,8 +134,11 @@ const messages: Record<string, [string, string]> = {
     "{{name}} 已在所选位置启用",
     "{{name}} is already enabled at selected targets",
   ],
-  previewSkill: ["查看 {{name}} 详情", "Preview {{name}}"],
-  openOnMarket: ["在 GitHub 查看", "View on GitHub"],
+  previewSkill: [
+    "查看 {{name}} 详情 · {{source}}",
+    "Preview {{name}} · {{source}}",
+  ],
+  openOnMarket: ["在 skills.sh 查看", "View on skills.sh"],
   installsCount: ["{{n}} 次安装", "{{n}} installs"],
   backToScope: ["返回 {{name}}", "Back to {{name}}"],
   localInstallSub: [
@@ -224,7 +286,7 @@ const messages: Record<string, [string, string]> = {
   context: ["上下文", "Context"],
   contextChars: ["上下文（字符）", "Context (chars)"],
   contextTokens: ["上下文（Token）", "Context (tokens)"],
-  tokenUsage: ["Token 占用", "Context tokens"],
+  tokenUsage: ["名称与描述估算", "Name and description estimate"],
   tokens: ["tokens", "tokens"],
   tokShort: ["tok", "tok"],
   hoverExpand: ["靠近展开", "Approach to expand"],
@@ -352,7 +414,10 @@ const messages: Record<string, [string, string]> = {
     "原生配置 · ~/.config/opencode/opencode.json",
     "Native config · ~/.config/opencode/opencode.json",
   ],
-  stagingPath: ["暂存区 · {{path}}staging/", "Staging · {{path}}staging/"],
+  stagingPath: [
+    "停用时移至暂存目录 · {{path}}staging/",
+    "Paused in staging folder · {{path}}staging/",
+  ],
   deleteTitle: ["删除 {{name}}？", "Delete {{name}}?"],
   deleteBody: [
     "将从中央库、声明清单、预设和下列部署目录中移除。",
@@ -523,15 +588,7 @@ const messages: Record<string, [string, string]> = {
   sample: ["载入示例目录", "Load sample directory"],
   rootPath: ["中央库路径", "Central library path"],
   auth: ["Git 授权管理", "Git authorization"],
-  guide: ["首次运行指南", "First-run guide"],
-  guideWin: [
-    "Windows · 首次启动遇到 SmartScreen 时，核对下载来源后选择「更多信息」和「仍要运行」。",
-    "Windows · If SmartScreen appears, verify the download source, then choose More info and Run anyway.",
-  ],
-  guideMac: [
-    "macOS · 如系统拦截已核对来源的应用，可在「系统设置 → 隐私与安全性」中允许打开。",
-    "macOS · After verifying the download source, use System Settings → Privacy & Security to allow the app to open.",
-  ],
+  guide: ["使用指南", "User guide"],
   saved: ["已保存", "Saved"],
   added: ["已添加", "Added"],
   updated: ["已更新", "Updated"],
@@ -559,7 +616,7 @@ const messages: Record<string, [string, string]> = {
   ungroupedPreset: ["未归属预设", "No preset"],
   manualTag: ["手动", "Manual"],
   healthy: ["正常", "Healthy"],
-  showUndeployed: ["显示未装", "Show available"],
+  showUndeployed: ["未安装", "Not installed"],
   availableInLibrary: [
     "中央库可添装 · {{n}} 项",
     "Available in library · {{n}}",
@@ -657,7 +714,7 @@ const messages: Record<string, [string, string]> = {
     "Toggle Chinese translation / original skill descriptions",
   ],
   translatedBadge: ["译", "ZH"],
-  originalDesc: ["英文原文", "Original"],
+  originalDesc: ["描述原文", "Original"],
   zhDesc: ["中文译文", "Chinese translation"],
   editZhDesc: ["编辑译文", "Edit translation"],
   autoTranslate: ["重新翻译", "Auto-translate"],
@@ -725,8 +782,8 @@ const messages: Record<string, [string, string]> = {
   ],
   agentCustomPath: ["自定义目录路径", "Custom directory path"],
   agentDefaultPath: ["恢复默认路径", "Reset default"],
-  agentMechanismNative: ["原生配置开关", "Native config"],
-  agentMechanismStaging: ["暂存区停用", "Staging folder"],
+  agentDetected: ["本机已安装", "Installed"],
+  agentNotDetected: ["未检测到", "Not detected"],
   themeMode: ["主题外观", "Theme"],
   themeLight: ["浅色", "Light"],
   themeDark: ["深色", "Dark"],
@@ -734,24 +791,19 @@ const messages: Record<string, [string, string]> = {
   defaultView: ["默认列表视图", "Default view"],
   defaultSort: ["默认排序方式", "Default sort"],
   translationSectionHelp: [
-    "译文仅保存在 Pita 元数据层，不修改 SKILL.md 原始文件，保证零 Git 偏离。",
-    "Translations are stored in Pita metadata only — zero Git drift on SKILL.md.",
+    "译文保存在 Pita 元数据中。点击翻译时，所选 Skill 的描述会发送给选定的翻译服务。",
+    "Translations are stored in Pita metadata. When you request a translation, the selected skill descriptions are sent to the chosen service.",
   ],
   translationEngine: ["翻译引擎", "Translation engine"],
-  engineBuiltin: ["内置离线词库（零配置）", "Built-in offline glossary"],
+  engineBuiltin: ["Google 翻译（零配置）", "Google Translate (no setup)"],
   engineCustom: ["自定义 OpenAI 兼容接口", "Custom OpenAI-compatible API"],
   customApiUrl: ["API Base URL", "API Base URL"],
   customApiModel: ["模型名称", "Model"],
   customApiKey: ["API Key（仅存本机）", "API Key (local only)"],
-  customApiLocalNote: [
-    "演示模式下仅保存在浏览器本地配置，不会发起外部网络请求。",
-    "Stored locally in browser preferences only in this demo.",
-  ],
-  translateAllBtn: ["补齐全部未翻译 Skills", "Translate all untranslated skills"],
   translatedAllReceipt: ["已完成批量译文补齐", "Translated missing descriptions"],
   budgetSectionHelp: [
-    "为每个 Agent 设置上下文 Token 警戒线，超限时在 Token Dock、轮盘与待处理条中给出轻提示。",
-    "Set a per-agent context token budget to highlight heavy agents in the dock, wheel, and attention bar.",
+    "预警按 Pita 管理的已启用 Skills 的名称和原始描述估算。可按 Agent 单独分配给 Skills 的预算调整阈值。",
+    "Alerts estimate names and original descriptions of enabled skills managed by Pita. Set the threshold to suit the budget allocated to skills.",
   ],
   budgetEnable: ["开启 Token 预算预警", "Enable token budget alerts"],
   budgetLimitLabel: ["单 Agent 警戒阈值（tok）", "Per-agent warning threshold (tok)"],
@@ -807,8 +859,8 @@ const messages: Record<string, [string, string]> = {
   ],
   translating: ["翻译中…", "Translating…"],
   translateFallbackNote: [
-    "自定义接口不可用，已自动回退离线词库",
-    "Custom API unavailable; fell back to offline glossary",
+    "在线翻译失败，已载入内置译文。",
+    "Online translation failed. Loaded the bundled translation.",
   ],
   onboardingTitle: ["中央库尚无 Skills", "Your library is ready"],
   onboardingSub: [
@@ -948,6 +1000,18 @@ const messages: Record<string, [string, string]> = {
   customHarnessPath: ["全局 Skills 目录", "Global skills directory"],
   customHarnessProjectDir: ["项目配置目录（可选）", "Project config dir (optional)"],
   customHarnessColor: ["标识色", "Badge color"],
+  customHarnessIcon: ["图标 Logo", "Logo icon"],
+  customHarnessUploadIcon: ["上传图标", "Upload logo"],
+  customHarnessChangeIcon: ["更换图标", "Change logo"],
+  customHarnessClearIcon: ["恢复文字图标", "Use initials"],
+  customHarnessIconHint: [
+    "支持 PNG、SVG、JPG、WebP、ICO（自动适配高清尺寸）",
+    "Supports PNG, SVG, JPG, WebP, ICO (auto-resized)",
+  ],
+  customHarnessIconError: [
+    "无法读取该图片，请选择有效图标文件（≤ 5 MB）。",
+    "Could not read image. Pick a valid image file (≤ 5 MB).",
+  ],
   customHarnessAddBtn: ["添加并启用", "Add & enable"],
   customHarnessBadge: ["自定义", "Custom"],
   customHarnessRemove: ["移除自定义 Harness", "Remove custom harness"],
@@ -973,6 +1037,7 @@ i18n.use(initReactI18next).init({
   lng: preference("language", "zh-CN"),
   fallbackLng: "en",
   keySeparator: false,
+  nsSeparator: false,
   parseMissingKeyHandler(key) {
     if (key.startsWith("custom:")) {
       try {

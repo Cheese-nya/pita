@@ -56,6 +56,7 @@ import {
   DeploymentLegend,
 } from "../components/DeploymentControls";
 import { AgentTokenDock } from "../components/AgentTokenDock";
+import { TranslateSkillsButton } from "../components/TranslateSkillsButton";
 import { BulkActionBar, BulkPresetModal } from "../components/BulkActions";
 import { MatrixView } from "../components/MatrixView";
 import { DisplayMenu, type GroupMode } from "../components/DisplayMenu";
@@ -162,6 +163,7 @@ export const SkillRow = memo(function SkillRow({
   showZh = false,
   onToggleSelect,
   onManagePresets,
+  onAddAgent,
   undeployed = false,
   onQuickAdd,
   canQuickAdd = false,
@@ -175,6 +177,7 @@ export const SkillRow = memo(function SkillRow({
   showZh?: boolean;
   onToggleSelect: (id: string, shift: boolean) => void;
   onManagePresets?: (id: string) => void;
+  onAddAgent: () => void;
   undeployed?: boolean;
   onQuickAdd?: () => void;
   canQuickAdd?: boolean;
@@ -320,6 +323,7 @@ export const SkillRow = memo(function SkillRow({
           target={target}
           limit={agentLimit}
           onOpenDrift={(id) => open(id, "versions")}
+          onAddAgent={onAddAgent}
         />
       )}
       <span className="char-count">{skillTokens(s)}</span>
@@ -334,6 +338,7 @@ export function Library({
   activeSkillId,
   onVisibleIdsChange,
   onNavigate,
+  onAddAgent,
 }: {
   target?: ScopeTarget;
   open: (id: string, tab?: string) => void;
@@ -341,6 +346,7 @@ export function Library({
   activeSkillId?: string;
   onVisibleIdsChange?: (ids: string[]) => void;
   onNavigate?: (page: string) => void;
+  onAddAgent: () => void;
 }) {
   const w = useWorkspace(),
     { t, i18n } = useTranslation(),
@@ -356,6 +362,7 @@ export function Library({
   const defaultSort = useSettings((s) => s.defaultSort);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
   const tokenBudgetLimit = useSettings((s) => s.tokenBudgetLimit);
+  const installedAgents = usePita((s) => s.installedAgents);
 
   const [filter, setFilter] = useState<keyof ReturnType<typeof states>>("all"),
     [query, search] = useState(""),
@@ -467,9 +474,11 @@ export function Library({
           ? rank(a) - rank(b)
           : 0) || a.name.localeCompare(b.name);
 
-  const rows = scoped
-    .filter((s) => states(s, target)[filter] && matchesQuery(s))
-    .sort(compareSkills);
+  const rows = showLibrary
+    ? []
+    : scoped
+        .filter((s) => states(s, target)[filter] && matchesQuery(s))
+        .sort(compareSkills);
 
   const undeployedRows =
     target && showLibrary
@@ -505,6 +514,10 @@ export function Library({
   useEffect(() => {
     onVisibleIdsChange?.(visibleOrderedIds);
   }, [visibleOrderedIds, onVisibleIdsChange]);
+  useEffect(() => {
+    setSelectedIds([]);
+    lastSelected.current = null;
+  }, [showLibrary]);
 
   function toggleSelect(id: string, shift: boolean) {
     setSelectedIds((prev) => {
@@ -538,7 +551,12 @@ export function Library({
   const canMatrix = !target
     ? enabledAgents.length > 1
     : scopeAgents(w, target).length > 1;
-  const targetCanQuickAdd = !!target && scopeAgents(w, target).length > 0;
+  const targetCanQuickAdd =
+    !!target &&
+    scopeAgents(w, target).length > 0 &&
+    (target.kind !== "global-agent" ||
+      !installedAgents ||
+      installedAgents.includes(target.agentId));
   const hasAnyRows = rows.length > 0 || undeployedRows.length > 0;
 
   const driftedCount = !target
@@ -602,6 +620,7 @@ export function Library({
             <AgentTokenDock
               w={w}
               target={target}
+              onAddAgent={!target ? onAddAgent : undefined}
               sortedByTokens={sort === "bySize"}
               onSortByTokens={() =>
                 setSort((prev) => (prev === "bySize" ? "byName" : "bySize"))
@@ -764,8 +783,11 @@ export function Library({
             {(["all", "update", "drift"] as const).map((f) => (
               <button
                 key={f}
-                aria-pressed={filter === f}
-                onClick={() => setFilter(f)}
+                aria-pressed={!showLibrary && filter === f}
+                onClick={() => {
+                  setShowLibrary(false);
+                  setFilter(f);
+                }}
               >
                 {t(f)}
                 <span className="filter-count">
@@ -776,10 +798,15 @@ export function Library({
               </button>
             ))}
             <Select.Root
-              value={["all", "update", "drift"].includes(filter) ? "" : filter}
-              onValueChange={(v) =>
-                setFilter(v as keyof ReturnType<typeof states>)
+              value={
+                showLibrary || ["all", "update", "drift"].includes(filter)
+                  ? ""
+                  : filter
               }
+              onValueChange={(v) => {
+                setShowLibrary(false);
+                setFilter(v as keyof ReturnType<typeof states>);
+              }}
             >
               <Select.Trigger
                 className="extra-filter"
@@ -814,7 +841,7 @@ export function Library({
                 </Select.Content>
               </Select.Portal>
             </Select.Root>
-            {target && undeployedAll.length > 0 && (
+            {target && (
               <button
                 type="button"
                 className="extra-filter show-library-toggle"
@@ -853,6 +880,11 @@ export function Library({
             >
               <Languages size={15} aria-hidden="true" />
             </button>
+            {showZh && (
+              <TranslateSkillsButton
+                skills={showLibrary ? undeployedRows : rows}
+              />
+            )}
             <DisplayMenu
               showZh={showZh}
               onToggleZh={setShowZh}
@@ -984,6 +1016,7 @@ export function Library({
                         activeDetail={activeSkillId === s.id}
                         showZh={showZh}
                         onToggleSelect={toggleSelect}
+                        onAddAgent={onAddAgent}
                         onManagePresets={setPresetSkillId}
                       />
                     ))}
@@ -1009,6 +1042,7 @@ export function Library({
                     activeDetail={activeSkillId === s.id}
                     showZh={showZh}
                     onToggleSelect={toggleSelect}
+                    onAddAgent={onAddAgent}
                     undeployed
                     canQuickAdd={targetCanQuickAdd}
                     onQuickAdd={() =>
@@ -1100,7 +1134,10 @@ export function Library({
         )}
         <footer className="list-foot">
           <span>
-            {t("results", { shown: rows.length, total: scoped.length })}
+            {t("results", {
+              shown: showLibrary ? undeployedRows.length : rows.length,
+              total: showLibrary ? undeployedAll.length : scoped.length,
+            })}
           </span>
           <span>
             <History size={12} />

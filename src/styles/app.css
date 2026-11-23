@@ -1393,16 +1393,30 @@ svg.good-tone {
   border-radius: 3px;
 }
 
+.agent-pi-mark {
+  background: var(--text-1);
+  border-radius: 0;
+  -webkit-mask: url("/agents/pi.svg") center / contain no-repeat;
+  mask: url("/agents/pi.svg") center / contain no-repeat;
+}
+
+.skill-avatar-img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .agent-badge.off .agent-mark {
   filter: grayscale(1);
-  opacity: 0.58;
+  opacity: 0.76;
   transition:
     opacity var(--dur-fast) ease,
     filter var(--dur-fast) ease;
 }
 
 .agent-badge.off:hover .agent-mark {
-  opacity: 0.72;
+  opacity: 1;
   filter: grayscale(0.35);
 }
 
@@ -1673,6 +1687,42 @@ svg.good-tone {
   height: 30px;
 }
 
+.token-dock.stacked {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px;
+  scrollbar-width: none;
+}
+
+.token-dock.stacked .token-lane {
+  flex: 0 0 auto;
+  width: max(100%, var(--track-width, 0px));
+}
+
+.token-dock-addon {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  transform: translateX(var(--stack-offset, 0px));
+}
+
+.token-dock.stacked .token-logo {
+  background: var(--surface-raised);
+}
+
+.token-dock.stacked .token-item[data-active="true"] {
+  z-index: 3;
+}
+
+.agent-add-button {
+  color: var(--text-2);
+}
+
+.agent-add-button > :is(.radial-node-orb, .ring-node-orb) {
+  animation: none;
+  border: 1px solid var(--border);
+}
+
 .token-item {
   position: absolute;
   top: 0;
@@ -1692,9 +1742,9 @@ svg.good-tone {
   transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.token-dock.reorderable .token-logo {
+.token-dock.reorderable .token-logo[data-agent-id] {
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-x;
 }
 
 .token-dock.is-dragging .token-logo,
@@ -1792,8 +1842,8 @@ svg.good-tone {
   pointer-events: none;
   transform: translate3d(
     calc(
-      (var(--bar-w, 0px) + 10px) * var(--expand, 0) - (1 - var(--expand, 0)) *
-        12px
+      (var(--bar-w, 0px) + var(--readout-gap, 10px)) * var(--expand, 0) -
+        (1 - var(--expand, 0)) * 12px
     ),
     -50%,
     0
@@ -2020,7 +2070,7 @@ svg.good-tone {
 }
 
 .drawer {
-  width: clamp(390px, 36vw, 448px);
+  width: min(100vw, clamp(390px, 36vw, 448px));
   inset: 0 0 0 auto;
   border-width: 0 0 0 1px;
   box-shadow: var(--shadow-drawer);
@@ -2029,6 +2079,7 @@ svg.good-tone {
 
 .drawer-body {
   overflow: auto;
+  min-width: 0;
   padding: 14px 18px 20px;
   flex: 1;
 }
@@ -2201,6 +2252,7 @@ svg.good-tone {
   display: block;
   color: var(--text-2);
   margin-bottom: 5px;
+  overflow-wrap: anywhere;
 }
 
 .deployment {
@@ -2269,6 +2321,26 @@ dd {
 
 .markdown {
   padding: 10px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+.drawer .form,
+.drawer .preview,
+.drawer .section,
+.drawer .detail-source > small {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -3260,6 +3332,7 @@ dd {
   gap: 10px;
 }
 .market-card {
+  position: relative;
   background: var(--surface);
   border: var(--line);
   border-radius: var(--radius-m);
@@ -3270,14 +3343,50 @@ dd {
   min-width: 0;
   transition: border-color var(--dur-fast) ease;
 }
+.market-card-open {
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0 35px 0 0;
+}
+.market-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-m);
+}
+.market-card-open strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.market-card > .market-install-btn {
+  position: absolute;
+  top: 12px;
+  right: 13px;
+  z-index: 1;
+}
+.market-card-foot > button {
+  position: relative;
+  z-index: 1;
+}
+.market-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.market-drawer-body > * {
+  flex-shrink: 0;
+}
+.market-drawer-footer {
+  padding: 12px 18px;
+  margin: 0;
+}
 .market-card:hover {
   border-color: var(--border-hover);
-}
-.market-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
 }
 .market-avatar {
   width: 26px;
@@ -3292,24 +3401,6 @@ dd {
   border: 1px solid var(--border);
   color: var(--text-2);
 }
-.market-avatar.tone-neutral {
-  color: var(--text-1);
-}
-.market-avatar.tone-warm {
-  background: var(--warn-soft);
-  border-color: var(--warn-border);
-  color: var(--warn-text);
-}
-.market-avatar.tone-sage {
-  background: var(--ok-soft);
-  border-color: var(--ok-border);
-  color: var(--ok-text);
-}
-.market-avatar.tone-plum {
-  background: var(--accent-soft);
-  border-color: var(--border-strong);
-  color: var(--text-1);
-}
 .market-avatar.has-img {
   padding: 0;
   overflow: hidden;
@@ -3322,41 +3413,6 @@ dd {
   object-fit: cover;
   display: block;
   border-radius: inherit;
-}
-.market-title-btn {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  justify-content: flex-start;
-  text-align: left;
-  border-radius: var(--radius-xs);
-}
-.market-title-btn:hover:not(:disabled) {
-  background: transparent;
-}
-.market-title-btn strong {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-body);
-  color: var(--text-1);
-}
-.market-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-}
-.market-card-actions .icon-button {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
 }
 .market-install-btn {
   width: 28px;
@@ -3375,15 +3431,6 @@ dd {
   background: var(--ok-soft);
   border-color: var(--ok-border);
   color: var(--ok-text);
-}
-.market-desc {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.42;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .market-card-foot {
   display: flex;
@@ -4001,7 +4048,7 @@ button.token-readout.interactive {
   flex-direction: column;
   gap: 8px;
 }
-.detail-zh-form input {
+.detail-zh-form textarea {
   width: 100%;
   min-width: 0;
 }
@@ -5646,6 +5693,10 @@ button.token-readout.interactive {
    Settings Center (5-Section Modal)
    ============================================================================ */
 .modal.settings-modal {
+  inset: 0;
+  height: fit-content;
+  margin: auto;
+  transform: none;
   width: min(720px, 94vw);
   max-height: min(84vh, 660px);
   padding: 0;
@@ -5653,6 +5704,16 @@ button.token-readout.interactive {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+.settings-guide {
+  list-style: decimal;
+  padding: 7px 0 0 1.25em;
+}
+.settings-guide li + li {
+  margin-top: 5px;
+}
+.settings-about-links {
+  flex-wrap: wrap;
 }
 .modal.settings-modal > .modal-head {
   padding: 14px 18px;
@@ -5793,15 +5854,6 @@ button.token-readout.interactive {
 .settings-agent-toggle strong {
   font-weight: 580;
   color: var(--text-1);
-}
-.settings-mech-chip {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: var(--radius-xs);
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  white-space: nowrap;
 }
 .settings-agent-path {
   display: flex;
@@ -6232,8 +6284,38 @@ body:has(.bulk-bar) .toast {
 }
 
 .color-swatch.active {
-  border-color: var(--ink);
+  border-color: var(--border-focus);
   box-shadow: 0 0 0 2px var(--surface);
+}
+
+.nowrap-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.agent-custom-img {
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.custom-harness-icon-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-harness-icon-preview {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  overflow: hidden;
 }
 
 [data-theme="dark"] .agent-mark[data-agent="hermes"] {

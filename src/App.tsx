@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   RefreshCw,
@@ -19,6 +27,8 @@ import {
   ChevronDown,
   HardDrive,
   Search,
+  GripVertical,
+  Trash2,
 } from "lucide-react";
 import { usePita } from "./store";
 import {
@@ -26,6 +36,8 @@ import {
   agentPaths,
   available,
   globalTarget,
+  orderAgentsByPresence,
+  orderProjects,
   projectTarget,
   scopeAgents,
 } from "./types/workspace";
@@ -33,6 +45,7 @@ import { useSettings } from "./services/settings";
 import { isNativeRuntime } from "./services/pitaClient";
 import {
   AgentIcon,
+  Modal,
   SidebarItem,
   IconButton,
   ReceiptToast,
@@ -48,20 +61,246 @@ import { AddProject, Settings } from "./views/Dialogs";
 import { InstallSkills } from "./views/InstallSkills";
 import { Detail } from "./views/Detail";
 import { preference, remember } from "./i18n";
-import type { ScopeTarget } from "./types/domain";
+import type { AgentId, ScopeTarget } from "./types/domain";
+
+const SIDEBAR_DRAG_THRESHOLD_PX = 5;
+
+function useVerticalDragReorder<T extends string>({
+  ids,
+  disabled = false,
+  onCommit,
+}: {
+  ids: readonly T[];
+  disabled?: boolean;
+  onCommit: (nextOrder: T[]) => void;
+}) {
+  const rowRefs = useRef(new Map<T, HTMLElement>());
+  const dragRef = useRef<{
+    id: T;
+    pointerId: number;
+    startY: number;
+    origIndex: number;
+    targetIndex: number;
+    origOrder: T[];
+    rects: DOMRect[];
+    active: boolean;
+    cancelled: boolean;
+  } | null>(null);
+  const suppressUntilRef = useRef(0);
+  const idsRef = useRef(ids);
+  idsRef.current = ids;
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+
+  const [dragUI, setDragUI] = useState<{
+    id: T;
+    dy: number;
+    previewOrder: T[];
+    rects: DOMRect[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (disabled && dragRef.current) {
+      dragRef.current = null;
+      setDragUI(null);
+    }
+  }, [disabled]);
+
+  useEffect(() => {
+    const d = dragRef.current;
+    if (!d) return;
+    if (
+      d.origOrder.length !== ids.length ||
+      d.origOrder.some((id, i) => ids[i] !== id)
+    ) {
+      dragRef.current = null;
+      setDragUI(null);
+    }
+  }, [ids]);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || d.cancelled || e.pointerId !== d.pointerId) return;
+      if (disabledRef.current) {
+        dragRef.current = null;
+        setDragUI(null);
+        return;
+      }
+      const dy = e.clientY - d.startY;
+      if (!d.active) {
+        if (Math.abs(dy) < SIDEBAR_DRAG_THRESHOLD_PX) return;
+        const rects: DOMRect[] = [];
+        for (const itemId of d.origOrder) {
+          const el = rowRefs.current.get(itemId);
+          if (!el) {
+            dragRef.current = null;
+            return;
+          }
+          rects.push(el.getBoundingClientRect());
+        }
+        d.rects = rects;
+        d.active = true;
+      }
+
+      const n = d.origOrder.length;
+      const origRect = d.rects[d.origIndex];
+      if (!origRect || n < 2) return;
+      const minDy = d.rects[0].top - origRect.top;
+      const maxDy = d.rects[n - 1].bottom - origRect.bottom;
+      const clampedDy = Math.max(minDy, Math.min(maxDy, dy));
+      const dragCenterY = origRect.top + origRect.height / 2 + clampedDy;
+
+      let targetIndex = d.origIndex;
+      let bestDist = Infinity;
+      for (let i = 0; i < d.rects.length; i++) {
+        const slotCenter = d.rects[i].top + d.rects[i].height / 2;
+        const dist = Math.abs(dragCenterY - slotCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          targetIndex = i;
+        }
+      }
+      d.targetIndex = targetIndex;
+
+      const previewOrder = d.origOrder.filter((itemId) => itemId !== d.id);
+      previewOrder.splice(targetIndex, 0, d.id);
+      setDragUI({
+        id: d.id,
+        dy: clampedDy,
+        previewOrder,
+        rects: d.rects,
+      });
+    };
+
+    const finishDrag = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      dragRef.current = null;
+      if (d.active) {
+        suppressUntilRef.current = Date.now() + 140;
+        if (!d.cancelled && e.type === "pointerup") {
+          const next = d.origOrder.filter((itemId) => itemId !== d.id);
+          next.splice(d.targetIndex, 0, d.id);
+          if (next.some((itemId, i) => itemId !== d.origOrder[i])) {
+            onCommitRef.current(next);
+          }
+        }
+        setDragUI(null);
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const d = dragRef.current;
+      if (!d || !d.active || d.cancelled) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        d.cancelled = true;
+        suppressUntilRef.current = Date.now() + 140;
+        setDragUI(null);
+      }
+    };
+
+    const onBlur = () => {
+      const d = dragRef.current;
+      if (!d) return;
+      dragRef.current = null;
+      if (d.active) setDragUI(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  const bindRow = useCallback((id: T, el: HTMLElement | null) => {
+    if (el) rowRefs.current.set(id, el);
+    else rowRefs.current.delete(id);
+  }, []);
+
+  const startDrag = useCallback((e: React.PointerEvent, id: T) => {
+    if (disabledRef.current || e.button !== 0 || e.pointerType === "touch") {
+      return;
+    }
+    const current = idsRef.current;
+    const origIndex = current.indexOf(id);
+    if (origIndex < 0 || current.length <= 1) return;
+    dragRef.current = {
+      id,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      origIndex,
+      targetIndex: origIndex,
+      origOrder: [...current],
+      rects: [],
+      active: false,
+      cancelled: false,
+    };
+  }, []);
+
+  const shouldSuppressClick = useCallback(
+    () => Date.now() < suppressUntilRef.current,
+    [],
+  );
+
+  const getShiftY = (id: T, origIndex: number): number => {
+    if (!dragUI) return 0;
+    if (dragUI.id === id) return dragUI.dy;
+    const targetSlot = dragUI.previewOrder.indexOf(id);
+    if (
+      targetSlot < 0 ||
+      !dragUI.rects[targetSlot] ||
+      !dragUI.rects[origIndex]
+    ) {
+      return 0;
+    }
+    return dragUI.rects[targetSlot].top - dragUI.rects[origIndex].top;
+  };
+
+  return {
+    bindRow,
+    dragUI,
+    startDrag,
+    shouldSuppressClick,
+    getShiftY,
+  };
+}
+
 export function App() {
   const { t, i18n } = useTranslation(),
     { w, load, run, busy, loadError } = usePita();
   const enabledAgents = useSettings((s) => s.enabledAgents);
+  const userReorderedAgents = useSettings((s) => s.userReorderedAgents);
+  const reorderAgents = useSettings((s) => s.reorderAgents);
+  const projectOrder = useSettings((s) => s.projectOrder);
+  const reorderProjects = useSettings((s) => s.reorderProjects);
   const customPaths = useSettings((s) => s.customPaths);
   const customHarnesses = useSettings((s) => s.customHarnesses);
   const detectAgents = usePita((s) => s.detectAgents);
+  const installedAgents = usePita((s) => s.installedAgents);
   const themeMode = useSettings((s) => s.themeMode);
   const setThemeMode = useSettings((s) => s.setThemeMode);
   const agentDrawerOpen = useSettings((s) => s.agentDrawerOpen);
   const setAgentDrawerOpen = useSettings((s) => s.setAgentDrawerOpen);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
   const tokenBudgetLimit = useSettings((s) => s.tokenBudgetLimit);
+  const [removingProject, setRemovingProject] = useState<{
+    id: string;
+    name: string;
+    path: string;
+  } | null>(null);
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   );
@@ -99,6 +338,29 @@ export function App() {
     "idle" | "collapsing" | "expanding"
   >("idle");
   const rail = narrow ? !nav : collapsed;
+  const orderedEnabledAgents = useMemo(
+    () =>
+      orderAgentsByPresence(enabledAgents, installedAgents, userReorderedAgents),
+    [enabledAgents, installedAgents, userReorderedAgents],
+  );
+  const orderedProjects = useMemo(
+    () => orderProjects(w?.projects ?? [], projectOrder),
+    [w?.projects, projectOrder],
+  );
+  const orderedProjectIds = useMemo(
+    () => orderedProjects.map((p) => p.id),
+    [orderedProjects],
+  );
+  const agentDrag = useVerticalDragReorder<AgentId>({
+    ids: orderedEnabledAgents,
+    disabled: rail || orderedEnabledAgents.length <= 1,
+    onCommit: reorderAgents,
+  });
+  const projectDrag = useVerticalDragReorder<string>({
+    ids: orderedProjectIds,
+    disabled: rail || orderedProjectIds.length <= 1,
+    onCommit: reorderProjects,
+  });
   function finishSidebarMotion() {
     window.clearTimeout(animTimer.current);
     animTimer.current = 0;
@@ -345,37 +607,95 @@ export function App() {
               >
                 {t("installSkills")}
               </SidebarItem>
-              {enabledAgents.length <= 5 ? (
-                enabledAgents.map((a) => {
-                  const st = agentEnabledTokens(w, globalTarget(a), a);
-                  const over = tokenBudgetEnabled && st.tokens > tokenBudgetLimit;
-                  return (
-                    <SidebarItem
-                      key={a}
-                      detail={agentPaths(a, customPaths).join(" · ")}
-                      icon={<AgentIcon id={a} size={18} />}
-                      active={page === a}
-                      end={
-                        over ? (
-                          <i
-                            className="attention budget-dot"
-                            title={t("overBudgetTip", {
-                              tokens: st.tokens,
-                              limit: tokenBudgetLimit,
-                            })}
-                          />
-                        ) : undefined
-                      }
-                      onClick={() => goto(a)}
-                    >
-                      {t(a)}
-                    </SidebarItem>
-                  );
-                })
+              {orderedEnabledAgents.length <= 5 ? (
+                <div
+                  className={
+                    "sidebar-agent-flat-list" +
+                    (agentDrag.dragUI ? " is-dragging" : "")
+                  }
+                >
+                  {orderedEnabledAgents.map((a, idx) => {
+                    const st = agentEnabledTokens(w, globalTarget(a), a);
+                    const over =
+                      tokenBudgetEnabled && st.tokens > tokenBudgetLimit;
+                    const canReorder =
+                      !rail && orderedEnabledAgents.length > 1;
+                    return (
+                      <SidebarItem
+                        key={a}
+                        buttonRef={(el) => agentDrag.bindRow(a, el)}
+                        className={
+                          "sidebar-agent-item" +
+                          (agentDrag.dragUI?.id === a ? " dragging" : "")
+                        }
+                        style={
+                          {
+                            "--drag-y": `${agentDrag.getShiftY(a, idx)}px`,
+                          } as CSSProperties
+                        }
+                        detail={agentPaths(a, customPaths).join(" · ")}
+                        icon={<AgentIcon id={a} size={18} />}
+                        active={page === a}
+                        end={
+                          over || canReorder ? (
+                            <span className="drawer-agent-end agent-flat-end">
+                              {canReorder && (
+                                <GripVertical
+                                  size={12}
+                                  className="agent-drag-grip"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              {over && (
+                                <i
+                                  className="attention budget-dot"
+                                  title={t("overBudgetTip", {
+                                    tokens: st.tokens,
+                                    limit: tokenBudgetLimit,
+                                  })}
+                                />
+                              )}
+                            </span>
+                          ) : undefined
+                        }
+                        onPointerDown={(e) => agentDrag.startDrag(e, a)}
+                        onClick={() => {
+                          if (agentDrag.shouldSuppressClick()) return;
+                          goto(a);
+                        }}
+                        onKeyDown={(e) => {
+                          if (!canReorder || !e.altKey) return;
+                          if (e.key === "ArrowUp" && idx > 0) {
+                            e.preventDefault();
+                            const next = [...orderedEnabledAgents];
+                            [next[idx - 1], next[idx]] = [
+                              next[idx],
+                              next[idx - 1],
+                            ];
+                            reorderAgents(next);
+                          } else if (
+                            e.key === "ArrowDown" &&
+                            idx < orderedEnabledAgents.length - 1
+                          ) {
+                            e.preventDefault();
+                            const next = [...orderedEnabledAgents];
+                            [next[idx + 1], next[idx]] = [
+                              next[idx],
+                              next[idx + 1],
+                            ];
+                            reorderAgents(next);
+                          }
+                        }}
+                      >
+                        {t(a)}
+                      </SidebarItem>
+                    );
+                  })}
+                </div>
               ) : rail ? (
                 <AgentRadialWheel
                   w={w}
-                  agentIds={enabledAgents}
+                  agentIds={orderedEnabledAgents}
                   activeAgent={agent}
                   onSelect={(a) => goto(a)}
                   onAddAgent={openAddAgent}
@@ -401,18 +721,18 @@ export function App() {
                     />
                     <span className="drawer-title">{t("agents")}</span>
                     <em className="drawer-count mono">
-                      {enabledAgents.length}
+                      {orderedEnabledAgents.length}
                     </em>
                     {!agentDrawerOpen && (
                       <span className="drawer-stack-preview" aria-hidden="true">
-                        {enabledAgents.slice(0, 4).map((a) => (
+                        {orderedEnabledAgents.slice(0, 4).map((a) => (
                           <span className="drawer-mini-chip" key={a}>
                             <AgentIcon id={a} size={13} />
                           </span>
                         ))}
-                        {enabledAgents.length > 4 && (
+                        {orderedEnabledAgents.length > 4 && (
                           <span className="drawer-mini-more mono">
-                            +{enabledAgents.length - 4}
+                            +{orderedEnabledAgents.length - 4}
                           </span>
                         )}
                       </span>
@@ -421,20 +741,41 @@ export function App() {
                   {agentDrawerOpen ? (
                     <div
                       id="global-agent-drawer-list"
-                      className="agent-drawer-body"
+                      className={
+                        "agent-drawer-body" +
+                        (agentDrag.dragUI ? " is-dragging" : "")
+                      }
                     >
-                      {enabledAgents.map((a) => {
+                      {orderedEnabledAgents.map((a, idx) => {
                         const st = agentEnabledTokens(w, globalTarget(a), a);
                         const over =
                           tokenBudgetEnabled && st.tokens > tokenBudgetLimit;
+                        const canReorder = orderedEnabledAgents.length > 1;
                         return (
                           <SidebarItem
                             key={a}
+                            buttonRef={(el) => agentDrag.bindRow(a, el)}
+                            className={
+                              "sidebar-agent-item" +
+                              (agentDrag.dragUI?.id === a ? " dragging" : "")
+                            }
+                            style={
+                              {
+                                "--drag-y": `${agentDrag.getShiftY(a, idx)}px`,
+                              } as CSSProperties
+                            }
                             detail={agentPaths(a, customPaths).join(" · ")}
                             icon={<AgentIcon id={a} size={17} />}
                             active={page === a}
                             end={
                               <span className="drawer-agent-end">
+                                {canReorder && (
+                                  <GripVertical
+                                    size={12}
+                                    className="agent-drag-grip"
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 {over && (
                                   <i
                                     className="attention budget-dot"
@@ -447,7 +788,34 @@ export function App() {
                                 <em className="mono">{st.count}</em>
                               </span>
                             }
-                            onClick={() => goto(a)}
+                            onPointerDown={(e) => agentDrag.startDrag(e, a)}
+                            onClick={() => {
+                              if (agentDrag.shouldSuppressClick()) return;
+                              goto(a);
+                            }}
+                            onKeyDown={(e) => {
+                              if (!canReorder || !e.altKey) return;
+                              if (e.key === "ArrowUp" && idx > 0) {
+                                e.preventDefault();
+                                const next = [...orderedEnabledAgents];
+                                [next[idx - 1], next[idx]] = [
+                                  next[idx],
+                                  next[idx - 1],
+                                ];
+                                reorderAgents(next);
+                              } else if (
+                                e.key === "ArrowDown" &&
+                                idx < orderedEnabledAgents.length - 1
+                              ) {
+                                e.preventDefault();
+                                const next = [...orderedEnabledAgents];
+                                [next[idx + 1], next[idx]] = [
+                                  next[idx],
+                                  next[idx + 1],
+                                ];
+                                reorderAgents(next);
+                              }
+                            }}
                           >
                             {t(a)}
                           </SidebarItem>
@@ -481,67 +849,141 @@ export function App() {
             </section>
             <section>
               <h2>{t("projects")}</h2>
-              {w.projects.map((p) => {
-                const warn =
-                  w.bindings.some(
-                    (b) =>
-                      b.outOfSync &&
-                      b.target.kind === "project" &&
-                      b.target.projectId === p.id,
-                  ) ||
-                  w.skills.some((s) =>
-                    s.deployments.some(
-                      (d) =>
-                        d.drifted &&
-                        d.scope.kind === "project" &&
-                        d.scope.projectId === p.id,
-                    ),
+              <div
+                className={
+                  "sidebar-project-list" +
+                  (projectDrag.dragUI ? " is-dragging" : "")
+                }
+              >
+                {orderedProjects.map((p, idx) => {
+                  const warn =
+                    w.bindings.some(
+                      (b) =>
+                        b.outOfSync &&
+                        b.target.kind === "project" &&
+                        b.target.projectId === p.id,
+                    ) ||
+                    w.skills.some((s) =>
+                      s.deployments.some(
+                        (d) =>
+                          d.drifted &&
+                          d.scope.kind === "project" &&
+                          d.scope.projectId === p.id,
+                      ),
+                    );
+                  const projectAgentIds = orderAgentsByPresence(
+                    scopeAgents(w, projectTarget(p.id)),
+                    installedAgents,
+                    userReorderedAgents,
                   );
-                return (
-                  <SidebarItem
-                    icon={<FolderClosed />}
-                    key={p.id}
-                    detail={[
-                      p.path,
-                      ...p.enabledAgents.map((a) => t(a)),
-                      ...(warn ? [t("pending")] : []),
-                    ].join(" · ")}
-                    active={project?.id === p.id}
-                    onClick={() => goto("p/" + p.id)}
-                    end={
-                      <span
-                        className="dots"
-                        title={[
-                          ...p.enabledAgents.map((a) => t(a)),
-                          ...(warn ? [t("pending")] : []),
-                        ].join(" · ")}
+                  const projectAgentLabels = projectAgentIds.map((a) => t(a));
+                  const detailStr = [
+                    p.path,
+                    ...projectAgentLabels,
+                    ...(warn ? [t("pending")] : []),
+                  ].join(" · ");
+                  const dotsTitle = [
+                    ...projectAgentLabels,
+                    ...(warn ? [t("pending")] : []),
+                  ].join(" · ");
+                  const isCurrent = project?.id === p.id;
+                  const isDragged = projectDrag.dragUI?.id === p.id;
+                  return (
+                    <div
+                      key={p.id}
+                      ref={(el) => projectDrag.bindRow(p.id, el)}
+                      className={
+                        "sidebar-project-row" +
+                        (isCurrent ? " current" : "") +
+                        (isDragged ? " dragging" : "")
+                      }
+                      style={
+                        {
+                          "--drag-y": `${projectDrag.getShiftY(p.id, idx)}px`,
+                        } as CSSProperties
+                      }
+                    >
+                      <button
+                        type="button"
+                        className={
+                          "sidebar-item sidebar-project-btn" +
+                          (isCurrent ? " current" : "")
+                        }
+                        aria-label={p.name}
+                        data-rail-label={p.name}
+                        data-rail-detail={detailStr}
+                        aria-current={isCurrent ? "page" : undefined}
+                        onClick={() => goto("p/" + p.id)}
                       >
-                        {(() => {
-                          const projectAgentIds = scopeAgents(
-                            w,
-                            projectTarget(p.id),
-                          );
-                          return (
-                            <>
-                              {projectAgentIds.slice(0, 3).map((a) => (
-                                <AgentIcon id={a} key={a} size={13} />
-                              ))}
-                              {projectAgentIds.length > 3 && (
-                                <span className="dots-more">
-                                  +{projectAgentIds.length - 3}
-                                </span>
-                              )}
-                            </>
-                          );
-                        })()}
-                        {warn && <i className="attention" />}
-                      </span>
-                    }
-                  >
-                    {p.name}
-                  </SidebarItem>
-                );
-              })}
+                        <FolderClosed />
+                        <span className="sidebar-label">{p.name}</span>
+                      </button>
+                      <div className="project-row-end">
+                        <span
+                          className="dots project-end-dots"
+                          title={dotsTitle}
+                        >
+                          {projectAgentIds.slice(0, 3).map((a) => (
+                            <AgentIcon id={a} key={a} size={13} />
+                          ))}
+                          {projectAgentIds.length > 3 && (
+                            <span className="dots-more">
+                              +{projectAgentIds.length - 3}
+                            </span>
+                          )}
+                          {warn && <i className="attention" />}
+                        </span>
+                        <div className="project-end-actions">
+                          <button
+                            type="button"
+                            className="project-action-btn danger"
+                            aria-label={t("removeProjectQuick")}
+                            title={t("removeProjectQuick")}
+                            disabled={busy}
+                            onClick={() => setRemovingProject(p)}
+                          >
+                            <Trash2 size={13} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="project-action-btn project-drag-handle"
+                            aria-label={t("dragToReorder")}
+                            title={t("dragToReorder")}
+                            disabled={orderedProjects.length <= 1}
+                            onPointerDown={(e) => projectDrag.startDrag(e, p.id)}
+                            onKeyDown={(e) => {
+                              if (orderedProjects.length <= 1 || !e.altKey)
+                                return;
+                              if (e.key === "ArrowUp" && idx > 0) {
+                                e.preventDefault();
+                                const next = [...orderedProjectIds];
+                                [next[idx - 1], next[idx]] = [
+                                  next[idx],
+                                  next[idx - 1],
+                                ];
+                                reorderProjects(next);
+                              } else if (
+                                e.key === "ArrowDown" &&
+                                idx < orderedProjectIds.length - 1
+                              ) {
+                                e.preventDefault();
+                                const next = [...orderedProjectIds];
+                                [next[idx + 1], next[idx]] = [
+                                  next[idx],
+                                  next[idx + 1],
+                                ];
+                                reorderProjects(next);
+                              }
+                            }}
+                          >
+                            <GripVertical size={13} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
               <SidebarItem icon={<Plus />} onClick={() => setDialog("project")}>
                 {t("addProject")}
               </SidebarItem>
@@ -624,9 +1066,12 @@ export function App() {
           </div>
         </div>
       </aside>
-      {rail && sidebarPhase === "idle" && !dialog && !selection && !cmdOpen && (
-        <RailPreview sidebar={sidebar} />
-      )}
+      {rail &&
+        sidebarPhase === "idle" &&
+        !dialog &&
+        !selection &&
+        !cmdOpen &&
+        !removingProject && <RailPreview sidebar={sidebar} />}
       <main ref={mainRef}>
         <div className="topbar" data-tauri-drag-region>
           <button
@@ -717,6 +1162,41 @@ export function App() {
       {dialog === "project" && <AddProject close={() => setDialog("")} />}
       {dialog === "settings" && <Settings close={() => setDialog("")} />}
       {dialog === "newPreset" && <PresetEditor close={() => setDialog("")} />}
+      {removingProject && (
+        <Modal
+          title={t("removeProjectTitle", { name: removingProject.name })}
+          close={() => setRemovingProject(null)}
+        >
+          <div className="form">
+            <p>{t("removeProjectBody")}</p>
+            <code>{removingProject.path}</code>
+            <div className="actions">
+              <button
+                type="button"
+                onClick={() => setRemovingProject(null)}
+              >
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                disabled={busy}
+                onClick={async () => {
+                  const ok = await run(
+                    { type: "removeProject", id: removingProject.id },
+                    "removed",
+                    removingProject.name,
+                  );
+                  if (ok) setRemovingProject(null);
+                }}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+                {t("removeProject")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {cmdOpen && (
         <CommandPalette
           close={() => setCmdOpen(false)}

@@ -200,7 +200,7 @@ button:where(:hover:not(:disabled)),
 button:where(
   :active:not(:disabled):not(.skill-name):not(.sidebar-item):not(
       .metric-cell
-    ):not(.nav-scrim)
+    ):not(.nav-scrim):not(.project-drag-handle)
 ) {
   transform: scale(0.98);
 }
@@ -508,7 +508,7 @@ kbd {
   height: 16px;
 }
 
-.sidebar-item > span:first-of-type {
+.sidebar-item > .sidebar-label {
   transition: opacity 140ms ease;
   flex: 1;
   min-width: 0;
@@ -1126,6 +1126,7 @@ svg.good-tone {
   min-height: var(--row-skill);
   padding-block: 4px;
   contain: layout style;
+  cursor: pointer;
   transition: background-color var(--dur-fast) ease;
 }
 
@@ -1303,6 +1304,7 @@ svg.good-tone {
   gap: 4px;
   flex-wrap: wrap;
   justify-content: flex-start;
+  min-width: 0;
 }
 
 .row-badges button {
@@ -1346,6 +1348,18 @@ svg.good-tone {
   color: var(--warn-text);
   background: var(--warn-soft);
   border-color: var(--warn-border);
+}
+
+.badge.dsh-compat-badge {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.badge.dsh-compat-badge > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Agent deployment badges (4px tight squares, matte on/off states) */
@@ -1394,6 +1408,8 @@ svg.good-tone {
 }
 
 .agent-pi-mark {
+  display: inline-block;
+  flex: none;
   background: var(--text-1);
   border-radius: 0;
   -webkit-mask: url("/agents/pi.svg") center / contain no-repeat;
@@ -2517,6 +2533,10 @@ dd {
 .rail-mode .brand strong,
 .rail-mode .sidebar-item > .dots,
 .rail-mode .sidebar-item > em,
+.rail-mode .sidebar-item > .drawer-agent-end,
+.rail-mode .agent-drag-grip,
+.rail-mode .project-row-end,
+.rail-mode .project-end-actions,
 .rail-mode .storage > div,
 .rail-mode .lang > span {
   display: none;
@@ -2529,6 +2549,11 @@ dd {
   min-height: 0;
 }
 
+.rail-mode .sidebar-item,
+.rail-mode .sidebar-project-row {
+  width: 32px;
+}
+
 .rail-mode .sidebar-item {
   width: 32px;
   padding: 0;
@@ -2536,7 +2561,11 @@ dd {
   gap: 0;
 }
 
-.rail-mode .sidebar-item > span:first-of-type {
+.rail-mode .sidebar-project-btn {
+  flex: none;
+}
+
+.rail-mode .sidebar-item > .sidebar-label {
   display: none;
 }
 
@@ -3106,6 +3135,12 @@ dd {
 .choice:has(input:disabled) {
   cursor: default;
   color: var(--text-2);
+}
+.choice:has(input:disabled):hover {
+  background: transparent;
+}
+.target-agent-hint {
+  color: var(--text-3);
 }
 .choice input {
   flex: none;
@@ -4384,6 +4419,14 @@ button.token-readout.interactive {
   background: var(--hover);
   color: var(--text-1);
 }
+.matrix-cell-btn:disabled,
+.matrix-cell-btn.unavailable {
+  background: var(--local-well);
+  color: var(--text-3);
+  border: 1px solid var(--border-subtle);
+  opacity: 0.72;
+  cursor: default;
+}
 .matrix-cell-btn.drifted {
   background: var(--warn-soft);
   border: 1px solid var(--warn-border);
@@ -5460,6 +5503,187 @@ button.token-readout.interactive {
 }
 
 /* ============================================================================
+   Sidebar Drag-to-Reorder (Global Agents) & Project Row Hover Crossfade
+   ============================================================================ */
+.sidebar-agent-flat-list,
+.sidebar-project-list {
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-agent-flat-list.is-dragging,
+.agent-drawer-body.is-dragging,
+.sidebar-project-list.is-dragging {
+  user-select: none;
+}
+.sidebar-agent-item {
+  position: relative;
+  transform: translate3d(0, var(--drag-y, 0px), 0);
+}
+.sidebar-agent-flat-list.is-dragging .sidebar-agent-item:not(.dragging),
+.agent-drawer-body.is-dragging .sidebar-agent-item:not(.dragging),
+.sidebar-project-list.is-dragging .sidebar-project-row:not(.dragging) {
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sidebar-item.sidebar-agent-item.dragging,
+.sidebar-item.sidebar-agent-item.dragging:hover {
+  z-index: 6;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-1);
+  cursor: grabbing;
+}
+.agent-drag-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  opacity: 0;
+  transform: translate3d(2px, 0, 0);
+  cursor: grab;
+  transition:
+    opacity var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+  flex: none;
+}
+.sidebar-agent-item:hover .agent-drag-grip,
+.sidebar-agent-item:focus-visible .agent-drag-grip,
+.sidebar-agent-item.dragging .agent-drag-grip {
+  opacity: 0.72;
+  transform: translate3d(0, 0, 0);
+}
+.sidebar-agent-item.dragging .agent-drag-grip {
+  opacity: 1;
+  color: var(--text-1);
+  cursor: grabbing;
+}
+
+.sidebar-project-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--row-sidebar);
+  min-height: var(--row-sidebar);
+  margin-bottom: 2px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  transform: translate3d(0, var(--drag-y, 0px), 0);
+  transition: background-color var(--dur-fast) ease;
+}
+.sidebar-project-row:hover:not(.current):not(.dragging) {
+  background: var(--hover);
+  color: var(--text-1);
+}
+.sidebar-project-row.current:not(.dragging) {
+  background: var(--nav-active);
+  color: var(--text-1);
+}
+.sidebar-project-row.dragging {
+  z-index: 6;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-1);
+}
+.sidebar-project-row .sidebar-project-btn {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+  padding-right: 4px;
+  background: transparent;
+}
+.rail-mode .sidebar-project-row .sidebar-project-btn {
+  width: 32px;
+  flex: none;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+.sidebar-project-row .sidebar-project-btn:hover:not(.current),
+.sidebar-project-row .sidebar-project-btn.current,
+.sidebar-project-row .sidebar-project-btn.current:hover {
+  background: transparent;
+}
+.sidebar-project-row:hover .sidebar-project-btn {
+  color: var(--text-1);
+}
+.project-row-end {
+  position: relative;
+  flex: none;
+  display: grid;
+  align-items: center;
+  justify-items: end;
+  padding-right: 6px;
+}
+.project-end-dots,
+.project-end-actions {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  transition:
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.project-end-dots {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  pointer-events: auto;
+}
+.project-end-actions {
+  gap: 2px;
+  opacity: 0;
+  transform: translate3d(4px, 0, 0) scale(0.92);
+  pointer-events: none;
+}
+.sidebar-project-row:hover .project-end-dots,
+.sidebar-project-row:has(:focus-visible) .project-end-dots,
+.sidebar-project-row .project-row-end:focus-within .project-end-dots,
+.sidebar-project-row.dragging .project-end-dots {
+  opacity: 0;
+  transform: translate3d(-4px, 0, 0) scale(0.92);
+  pointer-events: none;
+}
+.sidebar-project-row:hover .project-end-actions,
+.sidebar-project-row:has(:focus-visible) .project-end-actions,
+.sidebar-project-row .project-row-end:focus-within .project-end-actions,
+.sidebar-project-row.dragging .project-end-actions {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  pointer-events: auto;
+}
+.project-action-btn {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-3);
+}
+.project-action-btn:hover:not(:disabled) {
+  background: var(--active);
+  border-color: transparent;
+  color: var(--text-1);
+}
+.project-action-btn.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+.project-action-btn:disabled {
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.45;
+}
+.project-drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+.sidebar-project-row.dragging .project-drag-handle {
+  cursor: grabbing;
+  color: var(--text-1);
+}
+
+/* ============================================================================
    Token Dock Over-Budget Warning
    ============================================================================ */
 .token-item.over-budget .token-logo {
@@ -5694,11 +5918,13 @@ button.token-readout.interactive {
    ============================================================================ */
 .modal.settings-modal {
   inset: 0;
-  height: fit-content;
+  height: min(84vh, 660px);
+  height: min(84dvh, 660px);
   margin: auto;
   transform: none;
   width: min(720px, 94vw);
   max-height: min(84vh, 660px);
+  max-height: min(84dvh, 660px);
   padding: 0;
   background: var(--surface-raised);
   display: flex;
@@ -5716,6 +5942,7 @@ button.token-readout.interactive {
   flex-wrap: wrap;
 }
 .modal.settings-modal > .modal-head {
+  flex: none;
   padding: 14px 18px;
   margin-bottom: 0;
   border-bottom: var(--line);
@@ -5723,8 +5950,10 @@ button.token-readout.interactive {
 .settings-shell {
   display: grid;
   grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
+  height: 100%;
   overflow: hidden;
 }
 .settings-nav {
@@ -5734,6 +5963,7 @@ button.token-readout.interactive {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-height: 0;
   overflow-y: auto;
 }
 .settings-nav-btn {
@@ -5767,6 +5997,7 @@ button.token-readout.interactive {
 }
 .settings-pane {
   padding: 16px 20px;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -6077,12 +6308,14 @@ body:has(.bulk-bar) .toast {
   .settings-shell {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
   }
   .settings-nav {
     border-right: 0;
     border-bottom: var(--line);
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 8px 12px;
     gap: 4px;
   }
@@ -6093,6 +6326,7 @@ body:has(.bulk-bar) .toast {
   }
   .settings-pane {
     padding: 14px;
+    min-height: 0;
   }
   .project-scope-actions {
     margin-left: 0;

@@ -13,6 +13,7 @@ import {
   agentEnabledTokens,
   copies,
   globalTarget,
+  orderAgentsByPresence,
   presetLabel,
   sameScope,
   scopeAgents,
@@ -20,6 +21,7 @@ import {
   type Skill,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
+import { isNativeRuntime } from "../services/pitaClient";
 import { resolveSkillDescription } from "../services/translator";
 import { usePita, useWorkspace } from "../store";
 import { AgentIcon, SkillIcon } from "./ui";
@@ -56,9 +58,14 @@ export function MatrixView({
   const w = useWorkspace();
   const { run, busy, installedAgents } = usePita();
   const enabledAgents = useSettings((s) => s.enabledAgents);
+  const userReorderedAgents = useSettings((s) => s.userReorderedAgents);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
   const tokenBudgetLimit = useSettings((s) => s.tokenBudgetLimit);
-  const agentIds: AgentId[] = target ? scopeAgents(w, target) : enabledAgents;
+  const agentIds: AgentId[] = orderAgentsByPresence(
+    target ? scopeAgents(w, target) : enabledAgents,
+    installedAgents,
+    userReorderedAgents,
+  );
 
   const brushRef = useRef<BrushSession | null>(null);
   const pointerHandledRef = useRef(false);
@@ -132,8 +139,9 @@ export function MatrixView({
     scope: ScopeTarget,
     status: "enabled" | "disabled-native" | "disabled-staging" | "absent",
     drifted: boolean,
+    unavailable: boolean,
   ) {
-    if (e.button !== 0 || busy) return;
+    if (e.button !== 0 || busy || unavailable) return;
     e.preventDefault();
     pointerHandledRef.current = true;
     const action = status === "enabled" ? "disable" : "enable";
@@ -150,9 +158,14 @@ export function MatrixView({
     setBrushPreview({ action, keys: new Set([key]) });
   }
 
-  function enterBrush(skill: Skill, agent: AgentId, scope: ScopeTarget) {
+  function enterBrush(
+    skill: Skill,
+    agent: AgentId,
+    scope: ScopeTarget,
+    unavailable: boolean,
+  ) {
     const session = brushRef.current;
-    if (!session) return;
+    if (!session || unavailable) return;
     const key = skill.id + ":" + agent;
     if (!session.cells.has(key)) {
       session.didDrag = true;
@@ -170,12 +183,13 @@ export function MatrixView({
     scope: ScopeTarget,
     status: "enabled" | "disabled-native" | "disabled-staging" | "absent",
     drifted: boolean,
+    unavailable: boolean,
   ) {
     if (pointerHandledRef.current) {
       pointerHandledRef.current = false;
       return;
     }
-    if (busy) return;
+    if (busy || unavailable) return;
     if (drifted) {
       open(skill.id, "versions");
       return;
@@ -309,24 +323,15 @@ export function MatrixView({
                   {agentIds.map((a) => {
                     const scope = target ?? globalTarget(a);
                     const copy = copies(s, scope).find((d) => d.agentId === a);
-                    if (
-                      !copy &&
-                      installedAgents &&
-                      !installedAgents.includes(a)
-                    ) {
-                      const label = `${t(a)} · ${t("agentNotInstalled")}`;
-                      return (
-                        <td className="matrix-agent-cell" key={a}>
-                          <span title={label} aria-label={label}>
-                            —
-                          </span>
-                        </td>
-                      );
-                    }
                     const status = copy?.status ?? "absent";
+                    const unavailable =
+                      status === "absent" &&
+                      isNativeRuntime() &&
+                      (!installedAgents || !installedAgents.includes(a));
                     const drifted = !!copy?.drifted;
                     const cellKey = s.id + ":" + a;
-                    const isBrushed = brushPreview?.keys.has(cellKey) ?? false;
+                    const isBrushed =
+                      !unavailable && (brushPreview?.keys.has(cellKey) ?? false);
                     const visualStatus = isBrushed
                       ? brushPreview!.action === "enable"
                         ? "enabled"
@@ -344,9 +349,11 @@ export function MatrixView({
                         ? targetName(w, target, t)
                         : t("global"),
                       t(a),
-                      t(status),
-                      drifted ? t("driftedAction") : t(verb),
-                    ].join(" · ");
+                      unavailable ? t("agentNotInstalled") : t(status),
+                      unavailable ? "" : drifted ? t("driftedAction") : t(verb),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
 
                     return (
                       <td className="matrix-agent-cell" key={a}>
@@ -361,6 +368,7 @@ export function MatrixView({
                                 : visualStatus === "disabled-staging"
                                   ? "staged"
                                   : "off") +
+                            (unavailable ? " unavailable" : "") +
                             (drifted && !isBrushed ? " drifted" : "") +
                             (isBrushed
                               ? " brush-active brush-" + brushPreview!.action
@@ -369,16 +377,35 @@ export function MatrixView({
                           aria-label={label}
                           title={label}
                           aria-pressed={status === "enabled"}
-                          disabled={busy}
+                          disabled={busy || unavailable}
                           onPointerDown={(e) =>
-                            startBrush(e, s, a, scope, status, drifted)
+                            startBrush(
+                              e,
+                              s,
+                              a,
+                              scope,
+                              status,
+                              drifted,
+                              unavailable,
+                            )
                           }
-                          onPointerEnter={() => enterBrush(s, a, scope)}
+                          onPointerEnter={() =>
+                            enterBrush(s, a, scope, unavailable)
+                          }
                           onClick={() =>
-                            keyboardActivate(s, a, scope, status, drifted)
+                            keyboardActivate(
+                              s,
+                              a,
+                              scope,
+                              status,
+                              drifted,
+                              unavailable,
+                            )
                           }
                         >
-                          {drifted && !isBrushed ? (
+                          {unavailable ? (
+                            <span aria-hidden="true">—</span>
+                          ) : drifted && !isBrushed ? (
                             <TriangleAlert size={13} aria-hidden="true" />
                           ) : visualStatus === "enabled" ? (
                             <Check size={14} aria-hidden="true" />

@@ -3,13 +3,15 @@ import { ChevronDown, FolderClosed } from "lucide-react";
 import type { ScopeTarget } from "../types/domain";
 import {
   globalTarget,
+  orderAgentsByPresence,
   projectTarget,
   sameScope,
   scopeAgents,
   type Workspace,
 } from "../types/workspace";
+import { isNativeRuntime } from "../services/pitaClient";
 import { useSettings } from "../services/settings";
-import { useWorkspace } from "../store";
+import { usePita, useWorkspace } from "../store";
 import { AgentIcon } from "./ui";
 
 export function targetName(
@@ -38,7 +40,15 @@ export function TargetPicker({
 }) {
   const w = useWorkspace(),
     enabledAgents = useSettings((s) => s.enabledAgents),
+    userReorderedAgents = useSettings((s) => s.userReorderedAgents),
+    installedAgents = usePita((s) => s.installedAgents),
     { t } = useTranslation();
+  const orderedAgents = orderAgentsByPresence(
+    enabledAgents,
+    installedAgents,
+    userReorderedAgents,
+  );
+  const native = isNativeRuntime();
   const selected = (target: ScopeTarget) =>
     value.some((v) => sameScope(v, target));
   const toggle = (target: ScopeTarget) =>
@@ -59,24 +69,46 @@ export function TargetPicker({
       <div>
         <fieldset>
           <legend>{t("agents")}</legend>
-          {enabledAgents.map((a) => (
-            <label className="choice" key={a}>
-              <input
-                type="checkbox"
-                checked={selected(globalTarget(a))}
-                onChange={() => toggle(globalTarget(a))}
-              />
-              <AgentIcon id={a} />
-              {t(a)}
-            </label>
-          ))}
+          {orderedAgents.map((a) => {
+            const isChecked = selected(globalTarget(a));
+            const unavailable =
+              native && (!installedAgents || !installedAgents.includes(a));
+            const disabled = unavailable && !isChecked;
+            return (
+              <label
+                className="choice"
+                key={a}
+                title={unavailable ? t("agentNotInstalled") : undefined}
+              >
+                <input
+                  type="checkbox"
+                  disabled={disabled}
+                  checked={isChecked}
+                  onChange={() => toggle(globalTarget(a))}
+                />
+                <AgentIcon id={a} />
+                <span>
+                  {t(a)}
+                  {unavailable && (
+                    <small className="target-agent-hint">
+                      {t("agentNotInstalled")}
+                    </small>
+                  )}
+                </span>
+              </label>
+            );
+          })}
         </fieldset>
         {w.projects.length > 0 && (
           <fieldset>
             <legend>{t("projects")}</legend>
             {w.projects.map((p) => {
               const target = projectTarget(p.id),
-                projectAgents = scopeAgents(w, target);
+                projectAgents = orderAgentsByPresence(
+                  scopeAgents(w, target),
+                  installedAgents,
+                  userReorderedAgents,
+                );
               return (
                 <label className="choice" key={p.id}>
                   <input

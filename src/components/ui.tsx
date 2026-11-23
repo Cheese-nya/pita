@@ -1,4 +1,11 @@
-import type { ComponentProps, ReactNode } from "react";
+import type {
+  ComponentProps,
+  CSSProperties,
+  KeyboardEventHandler,
+  PointerEventHandler,
+  ReactNode,
+  Ref,
+} from "react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -38,10 +45,17 @@ import { useTranslation } from "react-i18next";
 import { createTwoFilesPatch } from "diff";
 import { usePita } from "../store";
 import { useSettings } from "../services/settings";
-import { githubAvatarUrl } from "../services/marketplace";
+import {
+  githubAvatarUrl,
+  knownMarketplaceRepoForSkill,
+} from "../services/marketplace";
 import { changedFiles, unpack } from "../services/tree";
 import type { AgentId, DeploymentStatus } from "../types/domain";
-import { type Skill, type Files } from "../types/workspace";
+import {
+  extractFrontmatterGitHubUrl,
+  type Skill,
+  type Files,
+} from "../types/workspace";
 const icons = {
   access: Accessibility,
   braces: Braces,
@@ -61,10 +75,13 @@ const icons = {
 };
 export function SkillIcon({ skill }: { skill: Skill }) {
   const Icon = icons[skill.glyph as keyof typeof icons] ?? Box;
-  const avatar =
-    skill.source.type === "git"
-      ? githubAvatarUrl(skill.source.repoUrl)
-      : undefined;
+  const repoUrl =
+    (skill.source.type === "git" && skill.source.repoUrl
+      ? skill.source.repoUrl
+      : undefined) ||
+    extractFrontmatterGitHubUrl(skill) ||
+    knownMarketplaceRepoForSkill(skill.id);
+  const avatar = githubAvatarUrl(repoUrl);
   return (
     <span className={"skill-icon glyph-" + skill.glyph}>
       {avatar ? (
@@ -92,6 +109,7 @@ export function SkillAvatar({
       alt=""
       loading="lazy"
       draggable={false}
+      referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
     />
   );
@@ -232,26 +250,45 @@ export function SidebarItem({
   detail,
   end,
   active,
+  className,
+  style,
+  buttonRef,
   onClick,
+  onPointerDown,
+  onKeyDown,
 }: {
   icon: ReactNode;
   children: string;
   detail?: string;
   end?: ReactNode;
   active?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  buttonRef?: Ref<HTMLButtonElement>;
   onClick: () => void;
+  onPointerDown?: PointerEventHandler<HTMLButtonElement>;
+  onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
 }) {
   return (
     <button
-      className={"sidebar-item " + (active ? "current" : "")}
+      ref={buttonRef}
+      type="button"
+      className={
+        "sidebar-item" +
+        (active ? " current" : "") +
+        (className ? " " + className : "")
+      }
+      style={style}
       aria-label={children}
       data-rail-label={children}
       data-rail-detail={detail}
       aria-current={active ? "page" : undefined}
       onClick={onClick}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
     >
       {icon}
-      <span>{children}</span>
+      <span className="sidebar-label">{children}</span>
       {end}
     </button>
   );

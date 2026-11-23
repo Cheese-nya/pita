@@ -10,10 +10,12 @@ import { useTranslation } from "react-i18next";
 import type { AgentId, ScopeTarget } from "../types/domain";
 import {
   agentEnabledTokens,
+  orderAgentsByPresence,
   scopeAgents,
   type Workspace,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
+import { usePita } from "../store";
 import { AddAgentButton, AgentIcon } from "./ui";
 
 const LOGO = 30;
@@ -70,9 +72,11 @@ export function AgentTokenDock({
   const { t } = useTranslation();
   const tokShort = t("tokShort");
   const enabledAgents = useSettings((s) => s.enabledAgents);
+  const userReorderedAgents = useSettings((s) => s.userReorderedAgents);
   const reorderAgents = useSettings((s) => s.reorderAgents);
   const tokenBudgetEnabled = useSettings((s) => s.tokenBudgetEnabled);
   const tokenBudgetLimit = useSettings((s) => s.tokenBudgetLimit);
+  const installedAgents = usePita((s) => s.installedAgents);
 
   const dockRef = useRef<HTMLDivElement>(null);
   const laneRef = useRef<HTMLDivElement>(null);
@@ -93,8 +97,13 @@ export function AgentTokenDock({
   const suppressClickRef = useRef(false);
 
   const agentIds: AgentId[] = useMemo(
-    () => (target ? scopeAgents(w, target) : enabledAgents),
-    [w, target, enabledAgents],
+    () =>
+      orderAgentsByPresence(
+        target ? scopeAgents(w, target) : enabledAgents,
+        installedAgents,
+        userReorderedAgents,
+      ),
+    [w, target, enabledAgents, installedAgents, userReorderedAgents],
   );
   const canReorder = !target && agentIds.length > 1;
 

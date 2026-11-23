@@ -30,9 +30,11 @@ import {
 import {
   agentEnabledTokens,
   agentPaths,
+  checkDshCompatibility,
   copies,
   available,
   globalTarget,
+  orderAgentsByPresence,
   presetLabel,
   sameScope,
   scopeAgents,
@@ -60,7 +62,7 @@ import { TranslateSkillsButton } from "../components/TranslateSkillsButton";
 import { BulkActionBar, BulkPresetModal } from "../components/BulkActions";
 import { MatrixView } from "../components/MatrixView";
 import { DisplayMenu, type GroupMode } from "../components/DisplayMenu";
-import { pitaClient } from "../services/pitaClient";
+import { isNativeRuntime, pitaClient } from "../services/pitaClient";
 import { useWorkspace, usePita } from "../store";
 
 function states(s: Skill, target?: ScopeTarget) {
@@ -201,6 +203,19 @@ export const SkillRow = memo(function SkillRow({
       : w.presets.filter((p) => p.skillIds.includes(s.id));
   const isManual =
     !!target && !undeployed && copies(s, target).some((d) => d.manual);
+  const dshWarnings =
+    target?.kind === "global-agent" && target.agentId === "dsh"
+      ? checkDshCompatibility(s)
+      : [];
+  const dshWarningDetail = dshWarnings
+    .map((warn) =>
+      warn.code === "invalidName"
+        ? t("dshWarnInvalidName")
+        : warn.code === "legacyInvocationKey"
+          ? t("dshWarnLegacyKey", { detail: warn.detail ?? "" })
+          : t("dshWarnLongDesc"),
+    )
+    .join("\n");
 
   return (
     <div
@@ -210,6 +225,15 @@ export const SkillRow = memo(function SkillRow({
         (activeDetail ? " active-detail" : "") +
         (undeployed ? " undeployed" : "")
       }
+      onClick={(e) => {
+        if (
+          (e.target as HTMLElement).closest(
+            "button, a, input, select, textarea, [role='button']",
+          )
+        )
+          return;
+        open(s.id);
+      }}
     >
       <div className="skill-cell">
         <div className="skill-lead">
@@ -286,6 +310,16 @@ export const SkillRow = memo(function SkillRow({
               <StatusBadge kind={k} />
             </button>
           ))}
+        {dshWarnings.length > 0 && (
+          <span
+            className="badge pending dsh-compat-badge"
+            title={dshWarningDetail}
+            aria-label={`${t("dshCompatWarn")}: ${dshWarningDetail}`}
+          >
+            <TriangleAlert size={12} aria-hidden="true" />
+            <span>{t("dshCompatWarn")}</span>
+          </span>
+        )}
         {!target && onManagePresets && (
           <button
             type="button"
@@ -355,6 +389,7 @@ export function Library({
     busy = usePita((s) => s.busy),
     [showZh, setShowZh] = useTranslatePref();
   const enabledAgents = useSettings((s) => s.enabledAgents);
+  const userReorderedAgents = useSettings((s) => s.userReorderedAgents);
   const customPaths = useSettings((s) => s.customPaths);
   const density = useSettings((s) => s.density);
   const setDensity = useSettings((s) => s.setDensity);
@@ -555,8 +590,8 @@ export function Library({
     !!target &&
     scopeAgents(w, target).length > 0 &&
     (target.kind !== "global-agent" ||
-      !installedAgents ||
-      installedAgents.includes(target.agentId));
+      !isNativeRuntime() ||
+      (!!installedAgents && installedAgents.includes(target.agentId)));
   const hasAnyRows = rows.length > 0 || undeployedRows.length > 0;
 
   const driftedCount = !target
@@ -577,9 +612,13 @@ export function Library({
       pendingBindings.length > 0 ||
       updateCount > 0 ||
       overBudgetAgents.length > 0);
-  const projectSelectableAgents = p
-    ? Array.from(new Set([...enabledAgents, ...p.enabledAgents]))
-    : enabledAgents;
+  const projectSelectableAgents = orderAgentsByPresence(
+    p
+      ? Array.from(new Set([...enabledAgents, ...p.enabledAgents]))
+      : enabledAgents,
+    installedAgents,
+    userReorderedAgents,
+  );
 
   return (
     <>

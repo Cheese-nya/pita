@@ -21,10 +21,13 @@ import type { AgentId, ScopeTarget } from "../types/domain";
 import {
   copies,
   globalTarget,
+  hasDshAgentsFallbackConflict,
+  orderAgentsByPresence,
   scopeAgents,
   type Skill,
 } from "../types/workspace";
 import { useSettings } from "../services/settings";
+import { isNativeRuntime } from "../services/pitaClient";
 import { AddAgentButton, AgentBadge, AgentIcon, Modal } from "./ui";
 import { usePita, useWorkspace } from "../store";
 import { targetName } from "./TargetPicker";
@@ -33,8 +36,14 @@ export function DeploymentLegend({ target }: { target?: ScopeTarget }) {
   const { t } = useTranslation(),
     w = useWorkspace(),
     enabledAgents = useSettings((s) => s.enabledAgents),
+    userReorderedAgents = useSettings((s) => s.userReorderedAgents),
+    installedAgents = usePita((s) => s.installedAgents),
     [open, setOpen] = useState(false);
-  const labels = target ? scopeAgents(w, target) : enabledAgents;
+  const labels = orderAgentsByPresence(
+    target ? scopeAgents(w, target) : enabledAgents,
+    installedAgents,
+    userReorderedAgents,
+  );
   return (
     <>
       <button
@@ -428,25 +437,37 @@ export function DeploymentControls({
   const { t } = useTranslation(),
     w = useWorkspace(),
     enabledAgents = useSettings((s) => s.enabledAgents),
+    userReorderedAgents = useSettings((s) => s.userReorderedAgents),
     { run, busy, installedAgents } = usePita();
   const [expanded, setExpanded] = useState(false);
   const moreRef = useRef<HTMLButtonElement>(null);
-  const ids = target ? scopeAgents(w, target) : enabledAgents;
+  const ids = orderAgentsByPresence(
+    target ? scopeAgents(w, target) : enabledAgents,
+    installedAgents,
+    userReorderedAgents,
+  );
   const entries: PopoverEntry[] = ids.map((id: AgentId) => {
     const scope = target ?? globalTarget(id);
     const copy = copies(skill, scope).find((d) => d.agentId === id);
     const status = copy?.status ?? "absent";
     const unavailable =
-      status === "absent" && !!installedAgents && !installedAgents.includes(id);
+      status === "absent" &&
+      isNativeRuntime() &&
+      (!installedAgents || !installedAgents.includes(id));
     const drifted = !!copy?.drifted;
     const action = status === "enabled" ? "disable" : "enable";
     const verb = status === "absent" ? "install" : action;
+    const dshFallbackHint =
+      id === "dsh" && hasDshAgentsFallbackConflict(skill, scope)
+        ? t("dshAgentsFallbackHint")
+        : "";
     const label = [
       skill.name,
       target?.kind === "project" ? targetName(w, target, t) : t("global"),
       t(id),
       unavailable ? t("agentNotInstalled") : t(status),
       unavailable ? "" : drifted ? t("driftedAction") : t(verb),
+      dshFallbackHint,
     ]
       .filter(Boolean)
       .join(" · ");

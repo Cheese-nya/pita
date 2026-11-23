@@ -1,7 +1,7 @@
 use crate::adapters::{
-    expand_tilde, global_skill_dirs, project_skill_dirs, read_claude_skill_disabled,
-    read_codex_skill_disabled, set_claude_skill_enabled, set_codex_skill_enabled,
-    staging_skill_dir, target_skills_dir, uses_native_disable,
+    claude_settings_path, codex_config_path, expand_tilde, global_skill_dirs, project_skill_dirs,
+    read_claude_skill_disabled, read_codex_skill_disabled, set_claude_skill_enabled,
+    set_codex_skill_enabled, staging_skill_dir, target_skills_dir, uses_native_disable,
 };
 use crate::archive::{build_manifest, export_zip_bytes};
 use crate::db::PitaDb;
@@ -13,11 +13,12 @@ use crate::domain::{
 use crate::git_ops::{
     check_skill_upstream, is_path_git_tracked, normalize_github_repo_url, push_remote_backup,
 };
+use crate::install_journal::InstallJournal;
 use crate::secrets::{delete_remote_token, get_remote_token, set_remote_token};
 use crate::tree::{
     discover_flat_md_skills, discover_skill_dirs, hash_tree, is_valid_https_git_url, make_skill,
-    normalize_skill_id, parse_skill_meta, read_dir_tree, read_flat_md_skill, remove_path_safe,
-    write_dir_tree_atomic,
+    normalize_skill_id, parse_skill_meta, read_dir_tree, read_flat_md_skill, read_skill_tree,
+    remove_path_safe, write_dir_tree_atomic,
 };
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -422,7 +423,8 @@ impl WorkspaceEngine {
         let is_restore = matches!(cmd, Command::Restore { .. });
         let root_dir = state.root_dir.clone();
 
-        Self::apply_command(&root_dir, &mut ws, cmd, ctx, &mut on_progress)?;
+        let mut install = InstallJournal::default();
+        Self::apply_command(&root_dir, &mut ws, cmd, ctx, &mut on_progress, &mut install)?;
 
         // Recompute preset binding out_of_sync flags
         let preset_map: HashMap<String, Vec<String>> = ws
@@ -490,8 +492,8 @@ impl WorkspaceEngine {
             }
         }
 
-        state.db.save_undo(&before_ws)?;
-        state.db.save_workspace(&ws)?;
+        state.db.save_workspace_with_undo(&ws, Some(&before_ws))?;
+        install.commit();
         Ok(ws)
     }
 
@@ -520,6 +522,84 @@ impl WorkspaceEngine {
 
     fn write_central(root_dir: &Path, skill: &Skill) -> Result<(), PitaError> {
         write_dir_tree_atomic(&Self::central_skill_dir(root_dir, &skill.id), &skill.files)
+    }
+
+    fn verify_install_path(path: &Path, files: &Files, flat: bool) -> Result<(), PitaError> {
+        match fs::symlink_metadata(path) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+            Ok(meta) => {
+                let current = if flat && meta.is_file() {
+                    read_flat_md_skill(path)
+                } else if !flat && meta.is_dir() {
+                    let count = walkdir::WalkDir::new(path)
+                        .follow_links(false)
+                        .into_iter()
+                        .filter(|entry| {
+                            entry
+                                .as_ref()
+                                .map_or(true, |entry| !entry.file_type().is_dir())
+                        })
+                        .take(files.len() + 1)
+                        .count();
+                    if count != files.len() {
+                        return Err(PitaError::Internal("contentConflict".into()));
+                    }
+                    read_skill_tree(path)
+                } else {
+                    return Err(PitaError::Internal("contentConflict".into()));
+                };
+                if current.is_ok_and(|current| current == *files) {
+                    Ok(())
+                } else {
+                    Err(PitaError::Internal("contentConflict".into()))
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_install_target(
+        install: &mut InstallJournal,
+        root: &Path,
+        projects: &[ProjectWorkspace],
+        ctx: &RuntimeContext,
+        skill: &Skill,
+        target: &ScopeTarget,
+        agent: &AgentId,
+        verify: bool,
+    ) -> Result<(), PitaError> {
+        let base = target_skills_dir(target, agent, projects, ctx)?;
+        let active = base.join(&skill.id);
+        let staged = staging_skill_dir(root, target, agent, &skill.id);
+        let files = skill
+            .deployments
+            .iter()
+            .find(|d| d.scope == *target && d.agent_id == *agent)
+            .and_then(|d| d.files.as_ref())
+            .unwrap_or(&skill.files);
+        for path in [active, staged] {
+            if verify {
+                Self::verify_install_path(&path, files, false)?;
+            }
+            install.capture(path)?;
+        }
+        if matches!(agent, AgentId::Dsh) {
+            for path in find_matching_dsh_flat_md(&base, &skill.id) {
+                if verify {
+                    Self::verify_install_path(&path, files, true)?;
+                }
+                install.capture(path)?;
+            }
+        }
+        if uses_native_disable(agent, target, projects) {
+            match agent {
+                AgentId::ClaudeCode => install.capture(claude_settings_path(target, projects)?)?,
+                AgentId::Codex => install.capture(codex_config_path(target, projects)?)?,
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn remove_central(root_dir: &Path, skill_id: &str) {
@@ -1093,6 +1173,7 @@ impl WorkspaceEngine {
         s: &mut Skill,
         files: Files,
         sha: String,
+        strict_deploy: bool,
     ) -> Result<(), PitaError> {
         let previous = s.central_hash.clone();
         let meta = parse_skill_meta(&files)?;
@@ -1154,7 +1235,10 @@ impl WorkspaceEngine {
             d.drifted = d.installed_hash != sha;
         }
         for d in to_materialize {
-            let _ = Self::materialize_deployment(root_dir, projects, ctx, s, &d);
+            let result = Self::materialize_deployment(root_dir, projects, ctx, s, &d);
+            if strict_deploy {
+                result?;
+            }
         }
         Ok(())
     }
@@ -1267,6 +1351,7 @@ impl WorkspaceEngine {
         cmd: Command,
         ctx: &RuntimeContext,
         on_progress: &mut F,
+        install: &mut InstallJournal,
     ) -> Result<(), PitaError>
     where
         F: FnMut(&str),
@@ -1622,6 +1707,7 @@ impl WorkspaceEngine {
                         s,
                         copy_files,
                         copy_hash,
+                        false,
                     )?;
                 } else {
                     s.deployments[pos].installed_hash = s.central_hash.clone();
@@ -1676,6 +1762,7 @@ impl WorkspaceEngine {
                         s,
                         upstream.files,
                         new_hash,
+                        false,
                     )?;
                     if let SkillSource::Git { commit, .. } = &mut s.source {
                         *commit = upstream.commit;
@@ -1705,6 +1792,7 @@ impl WorkspaceEngine {
                     s,
                     snap.skill.files.clone(),
                     snap.skill.central_hash.clone(),
+                    false,
                 )?;
                 s.source = snap.skill.source;
                 s.has_update = snap.skill.has_update;
@@ -2087,8 +2175,55 @@ impl WorkspaceEngine {
                 {
                     return Err(PitaError::WorkspaceChanged);
                 }
+                let central = Self::central_skill_dir(root_dir, &entry.id);
+                Self::verify_install_path(&central, &entry.files, false)?;
+                install.capture(central)?;
+                for deployment in &entry.deployments {
+                    Self::capture_install_target(
+                        install,
+                        root_dir,
+                        &projects_snapshot,
+                        ctx,
+                        entry,
+                        &deployment.scope,
+                        &deployment.agent_id,
+                        false,
+                    )?;
+                }
+                for (target, agents) in &targets {
+                    for agent in agents {
+                        if !entry
+                            .deployments
+                            .iter()
+                            .any(|d| d.scope == *target && d.agent_id == *agent)
+                        {
+                            if Self::should_skip_uninstalled_global(target, agent, entry, ctx) {
+                                continue;
+                            }
+                            Self::capture_install_target(
+                                install,
+                                root_dir,
+                                &projects_snapshot,
+                                ctx,
+                                &skill,
+                                target,
+                                agent,
+                                true,
+                            )?;
+                        }
+                    }
+                }
+                install.arm();
                 let sha = hash_tree(&skill.files);
-                Self::replace_central(root_dir, &projects_snapshot, ctx, entry, skill.files, sha)?;
+                Self::replace_central(
+                    root_dir,
+                    &projects_snapshot,
+                    ctx,
+                    entry,
+                    skill.files,
+                    sha,
+                    true,
+                )?;
                 entry.source = skill.source;
                 entry.has_update = false;
                 entry.upstream = None;
@@ -2101,7 +2236,9 @@ impl WorkspaceEngine {
                                 && d.agent_id == agent
                                 && d.status == crate::domain::DeploymentStatus::Enabled
                         });
-                        if !enabled {
+                        if !enabled
+                            && !Self::should_skip_uninstalled_global(&target, &agent, entry, ctx)
+                        {
                             Self::deploy_one(
                                 root_dir,
                                 &projects_snapshot,
@@ -2147,8 +2284,50 @@ impl WorkspaceEngine {
                     }
                 }
 
+                for skill in &skills {
+                    if skill.id.is_empty()
+                        || matches!(skill.id.as_str(), "." | "..")
+                        || normalize_skill_id(&skill.id) != skill.id
+                        || !skill.deployments.is_empty()
+                    {
+                        return Err(PitaError::InvalidSkill);
+                    }
+                    let current = Self::central_skill_dir(root_dir, &skill.id);
+                    Self::verify_install_path(&current, &skill.files, false)?;
+                    install.capture(current)?;
+                }
+                for skill in skills
+                    .iter()
+                    .chain(ws.skills.iter().filter(|s| reuse_ids.contains(&s.id)))
+                {
+                    for target in &targets {
+                        for agent in scope_agents(ws, target) {
+                            if Self::should_skip_uninstalled_global(target, &agent, skill, ctx)
+                                || skill.deployments.iter().any(|d| {
+                                    d.scope == *target
+                                        && d.agent_id == agent
+                                        && d.status == crate::domain::DeploymentStatus::Enabled
+                                })
+                            {
+                                continue;
+                            }
+                            Self::capture_install_target(
+                                install,
+                                root_dir,
+                                &projects_snapshot,
+                                ctx,
+                                skill,
+                                target,
+                                &agent,
+                                true,
+                            )?;
+                        }
+                    }
+                }
+                install.arm();
                 let mut deploy_ids = Vec::new();
                 for s in skills {
+                    on_progress(&s.name);
                     Self::write_central(root_dir, &s)?;
                     deploy_ids.push(s.id.clone());
                     ws.skills.push(s);
@@ -3090,6 +3269,88 @@ mod tests {
             hash_tree(&read_dir_tree(&target_dir.join("demo")).unwrap()),
             actual_hash
         );
+    }
+
+    #[test]
+    fn install_rolls_back_earlier_targets_when_a_later_config_write_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("pita");
+        let global = tmp.path().join("global");
+        let project = tmp.path().join("project");
+        let config = project.join(".codex/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "[unclosed").unwrap();
+        let ctx = RuntimeContext {
+            enabled_agents: vec![AgentId::Antigravity],
+            custom_paths: HashMap::from([(AgentId::Antigravity, global.display().to_string())]),
+            custom_harnesses: vec![],
+        };
+        let engine = WorkspaceEngine::open_in_dir(library.clone()).unwrap();
+        engine
+            .execute(
+                Command::Projects {
+                    projects: vec![crate::domain::DetectedProject {
+                        id: "project".into(),
+                        name: "Project".into(),
+                        path: project.display().to_string(),
+                        enabled_agents: vec![AgentId::Codex],
+                        is_git_repo: false,
+                        detected_skills: None,
+                    }],
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+
+        let targets = vec![
+            ScopeTarget::GlobalAgent {
+                agent_id: AgentId::Antigravity,
+            },
+            ScopeTarget::Project {
+                project_id: "project".into(),
+            },
+        ];
+        let skill = sample_skill("transaction-test", "Complete instructions");
+        let add = || Command::Add {
+            skills: vec![skill.clone()],
+            targets: targets.clone(),
+            reuse: None,
+        };
+        assert_eq!(
+            engine.execute(add(), &ctx, |_| {}).unwrap_err().code(),
+            "invalidAgentConfig"
+        );
+        assert!(engine.current_workspace().unwrap().skills.is_empty());
+        let central = library.join("skills/transaction-test");
+        let deployed = global.join("transaction-test");
+        let project_copy = project.join(".agents/skills/transaction-test");
+        assert!(!central.exists() && !deployed.exists() && !project_copy.exists());
+        assert_eq!(fs::read_to_string(&config).unwrap(), "[unclosed");
+
+        fs::write(&config, "# Valid config\n").unwrap();
+        write_dir_tree_atomic(
+            &deployed,
+            &sample_skill("transaction-test", "Unmanaged local edits").files,
+        )
+        .unwrap();
+        assert_eq!(
+            engine.execute(add(), &ctx, |_| {}).unwrap_err().code(),
+            "contentConflict"
+        );
+        assert!(fs::read_to_string(deployed.join("SKILL.md"))
+            .unwrap()
+            .contains("Unmanaged local edits"));
+        assert!(!central.exists() && !project_copy.exists());
+
+        remove_path_safe(&deployed).unwrap();
+        let ws = engine.execute(add(), &ctx, |_| {}).unwrap();
+        assert_eq!(ws.skills[0].deployments.len(), 2);
+        for path in [&central, &deployed, &project_copy] {
+            assert_eq!(read_skill_tree(path).unwrap(), skill.files);
+        }
+        assert!(engine.undo(&ctx).unwrap().skills.is_empty());
+        assert!(!central.exists() && !deployed.exists() && !project_copy.exists());
     }
 
     #[test]

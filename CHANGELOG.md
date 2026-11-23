@@ -2,6 +2,17 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.3.0-beta.2] - 2026-11-23 (Pre-release)
+
+### Skill installation and marketplace
+- Download the selected GitHub skill's files at a recorded commit. GitHub folder links, skills.sh links and `owner/repo@skill` can be pasted into the Git installer.
+- Install supported website-published skills and import local folders, ZIP files and `.skill` archives with their supporting files.
+- Preserve existing files on installation conflicts and roll back partial writes when a deployment fails.
+- Cache leaderboard results and `SKILL.md` previews locally for use across app restarts.
+
+### Description translation
+- Batch Google Translate requests with a bounded per-description fallback. Save successful results to Pita metadata.
+
 ## [0.3.0-beta.1] - 2026-11-23 (Pre-release)
 
 ### DeepSeek Harness (`dsh`) Compatibility & Default Agent Ordering

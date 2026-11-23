@@ -2,8 +2,8 @@ use crate::domain::{
     Files, Inspection, PitaError, Skill, SkillSource, UpdateSummary, UpstreamTree,
 };
 use crate::tree::{
-    build_diff_text, changed_files, discover_skill_dirs, is_valid_https_git_url, make_skill,
-    normalize_git_url, read_dir_tree,
+    build_diff_text, changed_files, discover_import_skill_dirs, is_valid_https_git_url, make_skill,
+    normalize_git_url, read_dir_tree, read_skill_tree,
 };
 use git2::{
     build::RepoBuilder, Cred, FetchOptions, IndexAddOption, ProxyOptions, PushOptions,
@@ -194,10 +194,23 @@ fn clone_fresh(url: &str, dir: &Path, token: Option<&str>) -> Result<Repository,
 
 pub fn inspect_git_repo(cache_dir: &Path, url: &str) -> Result<Inspection, PitaError> {
     let normalized = normalize_git_url(url).ok_or(PitaError::InvalidUrl)?;
-    let (_repo, dir, branch, commit) = fetch_or_clone(cache_dir, &normalized, None, None)?;
+    init_libgit2_opts();
+    let staging = tempfile::Builder::new()
+        .prefix("inspect-git-")
+        .tempdir_in(cache_dir)?;
+    let dir = staging.path();
+    let mut fetch = FetchOptions::new();
+    fetch.depth(1).proxy_options(make_proxy_options());
+    let repo = RepoBuilder::new()
+        .fetch_options(fetch)
+        .clone(&normalized, dir)
+        .map_err(|_| PitaError::Internal("marketRepoUnavailable".into()))?;
+    let head = repo.head().map_err(|_| PitaError::InvalidSkill)?;
+    let branch = head.shorthand().ok_or(PitaError::InvalidSkill)?.to_string();
+    let commit = head.target().ok_or(PitaError::InvalidSkill)?.to_string();
     // Discover SKILL.md roots first, then read each skill directory independently so large
     // monorepos with 50+ skills never hit the single-skill 200-file / 10MB cap (#608/#614).
-    let skill_dirs = discover_skill_dirs(&dir);
+    let skill_dirs = discover_import_skill_dirs(dir);
     if skill_dirs.is_empty() {
         return Err(PitaError::InvalidSkill);
     }
@@ -206,7 +219,7 @@ pub fn inspect_git_repo(cache_dir: &Path, url: &str) -> Result<Inspection, PitaE
     let mut rejected = Vec::new();
     for skill_dir in skill_dirs {
         let rel = skill_dir
-            .strip_prefix(&dir)
+            .strip_prefix(dir)
             .ok()
             .map(|p| {
                 p.components()
@@ -222,7 +235,7 @@ pub fn inspect_git_repo(cache_dir: &Path, url: &str) -> Result<Inspection, PitaE
             commit: commit.clone(),
             skill_path,
         };
-        match read_dir_tree(&skill_dir).and_then(|tree| make_skill(tree, src, None)) {
+        match read_skill_tree(&skill_dir).and_then(|tree| make_skill(tree, src, None)) {
             Ok(s) => skills.push(s),
             Err(_) => rejected.push(if rel.is_empty() {
                 "SKILL.md".into()

@@ -1,6 +1,6 @@
 {
   "name": "pita",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "description": "Pita — Cross-Agent Skills Manager (Windows, macOS, Linux)",
   "private": true,
   "type": "module",

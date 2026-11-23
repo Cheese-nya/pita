@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen, Archive } from "lucide-react";
 export function Picker({
   folder,
+  skillArchive = false,
   onPick,
   onNativePick,
 }: {
   folder: boolean;
+  skillArchive?: boolean;
   onPick: (files: File[]) => void;
   onNativePick?: () => void;
 }) {
@@ -19,7 +21,13 @@ export function Picker({
         onClick={() => (onNativePick ? onNativePick() : ref.current?.click())}
       >
         {folder ? <FolderOpen /> : <Archive />}
-        {t(folder ? "chooseFolder" : "chooseZip")}
+        {t(
+          folder
+            ? "chooseFolder"
+            : skillArchive
+              ? "chooseSkillArchive"
+              : "chooseZip",
+        )}
       </button>
       <input
         hidden
@@ -27,7 +35,7 @@ export function Picker({
         ref={ref}
         {...(folder
           ? { webkitdirectory: "", multiple: true }
-          : { accept: ".zip" })}
+          : { accept: skillArchive ? ".zip,.skill" : ".zip" })}
         onChange={(e) => {
           if (e.target.files?.length) onPick(Array.from(e.target.files));
           e.target.value = "";

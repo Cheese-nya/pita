@@ -7,8 +7,10 @@ pub mod domain;
 pub mod engine;
 pub mod git_ops;
 pub mod hooks;
+mod install_journal;
 pub mod logger;
 pub mod secrets;
+mod site_install;
 pub mod tree;
 
 use commands::AppState;
@@ -38,6 +40,10 @@ pub fn run() {
             commands::workspace_load,
             commands::detect_installed_agents,
             commands::marketplace_feed,
+            commands::marketplace_preview,
+            commands::github_install_fetch,
+            commands::inspect_site_skill,
+            commands::translate_google_batch,
             commands::workspace_execute,
             commands::workspace_undo,
             commands::inspect_git,

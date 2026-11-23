@@ -38,6 +38,7 @@ export type SkillSource =
       skillPath: string;
     }
   | { type: "local"; originPath?: string }
+  | { type: "website"; url: string }
   | { type: "unknown" };
 
 export type DeploymentStatus =

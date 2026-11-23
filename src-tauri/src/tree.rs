@@ -8,9 +8,9 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024; // 2MB per asset safety cap
-const MAX_TOTAL_SKILL_BYTES: u64 = 10 * 1024 * 1024; // 10MB total per skill safety cap
-const MAX_FILES_PER_SKILL: usize = 200;
+pub(crate) const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_SKILL_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_FILES_PER_SKILL: usize = 200;
 
 pub fn encode_bytes(bytes: &[u8]) -> String {
     B64.encode(bytes)
@@ -67,7 +67,7 @@ pub fn safe_rel_path(rel: &str) -> Result<PathBuf, PitaError> {
         match comp {
             Component::Normal(seg) => {
                 let s = seg.to_string_lossy();
-                if s.is_empty() || s.contains('\0') {
+                if s.is_empty() || s.contains(['\0', ':']) {
                     return Err(PitaError::InvalidBundle);
                 }
                 out.push(seg);
@@ -105,6 +105,21 @@ fn should_skip_entry(name: &str) -> bool {
 }
 
 pub fn read_dir_tree(root: &Path) -> Result<Files, PitaError> {
+    read_tree(root, false)
+}
+
+pub(crate) fn read_skill_tree(root: &Path) -> Result<Files, PitaError> {
+    read_tree(root, true)
+}
+
+fn skill_document(dir: &Path) -> Option<PathBuf> {
+    ["SKILL.md", "skill.md"]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+}
+
+fn read_tree(root: &Path, strict: bool) -> Result<Files, PitaError> {
     if !root.exists() || !root.is_dir() {
         return Err(PitaError::Missing);
     }
@@ -113,14 +128,16 @@ pub fn read_dir_tree(root: &Path) -> Result<Files, PitaError> {
     let mut total_bytes: u64 = 0;
 
     // Always include root SKILL.md first if present so caps never drop metadata.
-    let root_skill_md = canonical_root.join("SKILL.md");
-    if root_skill_md.is_file() {
-        if let Ok(meta) = fs::metadata(&root_skill_md) {
+    let document = skill_document(&canonical_root);
+    if let Some(root_skill_md) = &document {
+        if let Ok(meta) = fs::metadata(root_skill_md) {
             if meta.len() <= MAX_FILE_BYTES {
-                if let Ok(bytes) = fs::read(&root_skill_md) {
+                if let Ok(bytes) = fs::read(root_skill_md) {
                     total_bytes += bytes.len() as u64;
                     files.insert("SKILL.md".to_string(), encode_bytes(&bytes));
                 }
+            } else if strict {
+                return Err(PitaError::Internal("sourceTooLarge".into()));
             }
         }
     }
@@ -136,15 +153,20 @@ pub fn read_dir_tree(root: &Path) -> Result<Files, PitaError> {
             !should_skip_entry(&name)
         })
     {
-        if files.len() >= MAX_FILES_PER_SKILL || total_bytes >= MAX_TOTAL_SKILL_BYTES {
-            break;
-        }
         let entry = entry.map_err(|e| PitaError::Internal(e.to_string()))?;
-        if entry.file_type().is_symlink() || !entry.file_type().is_file() {
+        if !entry.file_type().is_file() || document.as_deref() == Some(entry.path()) {
             continue;
         }
-        let meta = entry.metadata().map_err(|e| PitaError::Internal(e.to_string()))?;
-        if meta.len() > MAX_FILE_BYTES || total_bytes + meta.len() > MAX_TOTAL_SKILL_BYTES {
+        let meta = entry
+            .metadata()
+            .map_err(|e| PitaError::Internal(e.to_string()))?;
+        if files.len() >= MAX_FILES_PER_SKILL
+            || meta.len() > MAX_FILE_BYTES
+            || total_bytes + meta.len() > MAX_TOTAL_SKILL_BYTES
+        {
+            if strict {
+                return Err(PitaError::Internal("sourceTooLarge".into()));
+            }
             continue;
         }
         let rel = entry
@@ -170,6 +192,14 @@ pub fn read_dir_tree(root: &Path) -> Result<Files, PitaError> {
 /// supporting nested subdirectories (e.g. `skills/category/my-skill/SKILL.md`)
 /// while skipping hidden dot-dirs, heavy build caches, and symlink loops.
 pub fn discover_skill_dirs(base_dir: &Path) -> Vec<PathBuf> {
+    discover_directories(base_dir, false)
+}
+
+pub(crate) fn discover_import_skill_dirs(base_dir: &Path) -> Vec<PathBuf> {
+    discover_directories(base_dir, true)
+}
+
+fn discover_directories(base_dir: &Path, importing: bool) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     if !base_dir.is_dir() {
         return found;
@@ -185,7 +215,7 @@ pub fn discover_skill_dirs(base_dir: &Path) -> Vec<PathBuf> {
         if !visited_real.insert(canon) {
             continue;
         }
-        if dir.join("SKILL.md").is_file() {
+        if skill_document(&dir).is_some() {
             found.push(dir);
             // Do not descend inside a matched skill directory for nested sub-skills.
             continue;
@@ -200,11 +230,19 @@ pub fn discover_skill_dirs(base_dir: &Path) -> Vec<PathBuf> {
             .flatten()
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') || should_skip_entry(&name) {
+                if should_skip_entry(&name)
+                    || (name.starts_with('.')
+                        && (!importing || name == ".system" || !e.path().join("skills").is_dir()))
+                {
                     return None;
                 }
                 let p = e.path();
-                if p.is_dir() {
+                let is_dir = if importing {
+                    e.file_type().is_ok_and(|kind| kind.is_dir())
+                } else {
+                    p.is_dir()
+                };
+                if is_dir {
                     Some(p)
                 } else {
                     None
@@ -295,7 +333,6 @@ pub fn write_dir_tree_atomic(dest: &Path, files: &Files) -> Result<(), PitaError
         fs::write(&out_path, bytes)?;
     }
 
-    let tmp_path = tmp.keep();
     let backup = if fs::symlink_metadata(dest).is_ok() {
         let b = parent.join(format!(
             ".pita-old-{}",
@@ -307,6 +344,7 @@ pub fn write_dir_tree_atomic(dest: &Path, files: &Files) -> Result<(), PitaError
         None
     };
 
+    let tmp_path = tmp.keep();
     if let Err(err) = fs::rename(&tmp_path, dest) {
         if let Some(b) = backup {
             let _ = fs::rename(&b, dest);
@@ -441,7 +479,7 @@ pub fn infer_glyph(id: &str) -> &'static str {
 pub fn make_skill(files: Files, source: SkillSource, glyph: Option<&str>) -> Result<Skill, PitaError> {
     let meta = parse_skill_meta(&files)?;
     let id = normalize_skill_id(&meta.name);
-    if id.is_empty() {
+    if id.is_empty() || id == "." || id == ".." {
         return Err(PitaError::InvalidSkill);
     }
     let central_hash = hash_tree(&files);

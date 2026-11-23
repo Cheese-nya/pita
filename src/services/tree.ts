@@ -1,6 +1,7 @@
 import { parse } from "yaml";
 import type { Files, Skill } from "../types/workspace";
 import type { SkillSource } from "../types/domain";
+export const MAX_IMPORT_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const encoder = new TextEncoder(),
   decoder = new TextDecoder();
 export function encode(bytes: Uint8Array) {
@@ -55,9 +56,11 @@ export async function makeSkill(
   glyph = "box",
 ): Promise<Skill> {
   const m = meta(files);
+  const id = normalize(m.name);
+  if (!id || id === "." || id === "..") throw Error("invalidSkill");
   return {
     ...m,
-    id: normalize(m.name),
+    id,
     files,
     source,
     glyph,

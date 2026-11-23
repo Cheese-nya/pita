@@ -11,6 +11,7 @@ import {
   normalizeGitUrl,
   makeSkill,
   fixtureTree,
+  MAX_IMPORT_ARCHIVE_BYTES,
 } from "./tree";
 import { TauriPitaClient } from "./tauriPitaClient";
 export type Inspection = { skills: Skill[]; rejected: string[] };
@@ -90,7 +91,10 @@ export interface PitaClient {
   ): Promise<{ inspection: Inspection; source: string } | null>;
   usageSummary(): Promise<UsageSummary>;
   enableUsageHook(agent: AgentId): Promise<UsageSummary>;
-  disableUsageHook(agent: AgentId, clearHistory: boolean): Promise<UsageSummary>;
+  disableUsageHook(
+    agent: AgentId,
+    clearHistory: boolean,
+  ): Promise<UsageSummary>;
   appVersion(): Promise<string>;
   checkAppUpdate(): Promise<AppUpdateInfo>;
   openLogsDir(): Promise<string | null>;
@@ -219,12 +223,29 @@ export class MockPitaClient implements PitaClient {
   }
   async inspectFiles(files: File[], zip: boolean) {
     if (!files.length) throw Error("invalidSkill");
+    if (zip && files[0].size > MAX_IMPORT_ARCHIVE_BYTES)
+      throw Error("sourceTooLarge");
     let entries: Record<string, string>;
     try {
+      let totalBytes = 0;
+      const names = new Set<string>();
       entries = zip
         ? Object.fromEntries(
             Object.entries(
-              unzipSync(new Uint8Array(await files[0].arrayBuffer())),
+              unzipSync(new Uint8Array(await files[0].arrayBuffer()), {
+                filter: ({ name, originalSize }) => {
+                  if (name.endsWith("/")) return false;
+                  if (names.has(name)) throw Error("invalidBundle");
+                  names.add(name);
+                  totalBytes += originalSize;
+                  if (
+                    names.size > 8192 ||
+                    totalBytes > MAX_IMPORT_ARCHIVE_BYTES
+                  )
+                    throw Error("sourceTooLarge");
+                  return true;
+                },
+              }),
             )
               .filter(([p]) => !p.endsWith("/"))
               .map(([p, v]) => [p, encode(v)]),
@@ -237,14 +258,15 @@ export class MockPitaClient implements PitaClient {
               ]),
             ),
           );
-    } catch {
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        ["sourceTooLarge", "invalidBundle"].includes(e.message)
+      )
+        throw e;
       throw Error("invalidSkill");
     }
-    try {
-      return await (await import("./archive")).importTrees(entries, !zip);
-    } catch {
-      throw Error("invalidSkill");
-    }
+    return (await import("./archive")).importTrees(entries, !zip);
   }
   async projects(files: File[] | null, batch: boolean) {
     const demoPaths = batch
@@ -427,14 +449,14 @@ export class MockPitaClient implements PitaClient {
   }
 
   async appVersion(): Promise<string> {
-    return "0.3.0-beta.1";
+    return "0.3.0-beta.2";
   }
 
   async checkAppUpdate(): Promise<AppUpdateInfo> {
     await delay(200);
     return {
-      current: "0.3.0-beta.1",
-      latest: "v0.3.0-beta.1",
+      current: "0.3.0-beta.2",
+      latest: "v0.3.0-beta.2",
       hasUpdate: false,
       releaseUrl: null,
       error: null,

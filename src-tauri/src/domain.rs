@@ -266,6 +266,8 @@ pub enum SkillSource {
         #[serde(rename = "originPath", skip_serializing_if = "Option::is_none")]
         origin_path: Option<String>,
     },
+    #[serde(rename = "website")]
+    Website { url: String },
     #[serde(rename = "unknown")]
     Unknown,
 }

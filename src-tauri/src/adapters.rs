@@ -325,7 +325,10 @@ fn write_file_atomic(path: &Path, content: &str) -> Result<(), PitaError> {
 }
 
 /// Lossless native config toggle for Claude Code (`settings.json` / `.claude/settings.local.json`).
-fn claude_settings_path(scope: &ScopeTarget, projects: &[ProjectWorkspace]) -> Result<PathBuf, PitaError> {
+pub(crate) fn claude_settings_path(
+    scope: &ScopeTarget,
+    projects: &[ProjectWorkspace],
+) -> Result<PathBuf, PitaError> {
     match scope {
         ScopeTarget::GlobalAgent { .. } => Ok(expand_tilde("~/.claude/settings.json")),
         ScopeTarget::Project { project_id } => {
@@ -404,7 +407,10 @@ pub fn set_claude_skill_enabled(
 }
 
 /// Lossless native config toggle for Codex (`~/.codex/config.toml`) via `toml_edit`.
-fn codex_config_path(scope: &ScopeTarget, projects: &[ProjectWorkspace]) -> Result<PathBuf, PitaError> {
+pub(crate) fn codex_config_path(
+    scope: &ScopeTarget,
+    projects: &[ProjectWorkspace],
+) -> Result<PathBuf, PitaError> {
     match scope {
         ScopeTarget::GlobalAgent { .. } => Ok(expand_tilde("~/.codex/config.toml")),
         ScopeTarget::Project { project_id } => {

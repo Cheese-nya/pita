@@ -115,20 +115,32 @@ function completionText(response?: CompletionResponse): string {
   return content;
 }
 
-async function translateWithGoogle(text: string): Promise<string> {
-  const query = new URLSearchParams({
-    client: "gtx",
+const GOOGLE_BATCH_LIMIT = 12;
+const GOOGLE_QUERY_LIMIT = 4_500;
+const googleParams = (client = "dict-chrome-ex") =>
+  new URLSearchParams({
+    client,
     sl: "auto",
     tl: "zh-CN",
-    dt: "t",
-    q: text,
   });
+
+function validGoogleTranslation(text: unknown, original: string) {
+  if (typeof text !== "string") return "";
+  const translated = text.trim();
+  return translated !== original && hasChinese(translated) ? translated : "";
+}
+
+async function translateGoogleSingle(text: string): Promise<string> {
+  const body = googleParams("gtx");
+  body.set("dt", "t");
+  body.set("q", text);
   const data = isTauriNative()
     ? await invoke<unknown>("translate_description", { text })
-    : await fetch(
-        `https://translate.googleapis.com/translate_a/single?${query}`,
-        { signal: AbortSignal.timeout(12_000) },
-      ).then((result) => {
+    : await fetch("/google-translate/single", {
+        method: "POST",
+        body,
+        signal: AbortSignal.timeout(6_000),
+      }).then((result) => {
         if (!result.ok) throw Error(`HTTP ${result.status}`);
         return result.json();
       });
@@ -138,11 +150,27 @@ async function translateWithGoogle(text: string): Promise<string> {
     .map((part: unknown) =>
       Array.isArray(part) && typeof part[0] === "string" ? part[0] : "",
     )
-    .join("")
-    .trim();
-  if (!hasChinese(translated) || translated === text)
-    throw Error("Missing Chinese translation");
-  return translated;
+    .join("");
+  return validGoogleTranslation(translated, text);
+}
+
+async function translateGoogleBatch(texts: string[], query: URLSearchParams) {
+  const data: unknown = isTauriNative()
+    ? await invoke("translate_google_batch", { texts })
+    : await fetch(`/google-translate/batch?${query}`, {
+        signal: AbortSignal.timeout(6_000),
+      }).then((result) => {
+        if (!result.ok) throw Error(`HTTP ${result.status}`);
+        return result.json();
+      });
+  if (!Array.isArray(data) || data.length !== texts.length)
+    throw Error("Invalid translation response");
+  return texts.map((text, i) =>
+    validGoogleTranslation(
+      Array.isArray(data[i]) ? data[i][0] : undefined,
+      text,
+    ),
+  );
 }
 
 export interface TranslationResult {
@@ -161,19 +189,26 @@ function buildCompletionsUrl(baseUrl: string): string {
 export async function translateDescriptionAsync(
   name: string,
   description: string,
+  settings = getSettings(),
 ): Promise<TranslationResult> {
   const fallback = translateDescription(name, description);
   const trimmed = description.trim();
   if (!trimmed) return { text: "", usedFallback: false };
 
   const { translationEngine, customApiUrl, customApiModel, customApiKey } =
-    getSettings();
+    settings;
   if (translationEngine === "builtin") {
-    if (fallback) {
-      return { text: fallback, usedFallback: false };
-    }
     try {
-      return { text: await translateWithGoogle(trimmed), usedFallback: false };
+      const query = googleParams();
+      query.append("q", trimmed);
+      const translated =
+        query.toString().length <= GOOGLE_QUERY_LIMIT
+          ? await translateGoogleBatch([trimmed], query)
+              .then(([text]) => text)
+              .catch(() => translateGoogleSingle(trimmed))
+          : await translateGoogleSingle(trimmed);
+      if (!translated) throw Error("Missing Chinese translation");
+      return { text: translated, usedFallback: false };
     } catch (err) {
       return {
         text: "",
@@ -339,7 +374,9 @@ export function needsTranslation(item: {
   return (
     !!raw &&
     !savedTranslation(item) &&
-    (!hasChinese(raw) || /(?:[a-z]{3,}\s+){3}/i.test(raw))
+    (!hasChinese(raw) ||
+      /[\u3040-\u30ff\uac00-\ud7af]/.test(raw) ||
+      /(?:[a-z]{3,}\s+){3}/i.test(raw))
   );
 }
 
@@ -348,7 +385,6 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface TranslateProgress {
   done: number;
   total: number;
-  newlyTranslated: { id: string; description: string; text: string }[];
 }
 
 export async function translateMissing<
@@ -362,7 +398,62 @@ export async function translateMissing<
   const translated: { id: string; description: string; text: string }[] = [];
   const pending = items.filter(needsTranslation);
   const total = pending.length;
+  const settings = getSettings();
   let done = 0;
+
+  const record = (item: T, text: string) => {
+    done += 1;
+    if (text)
+      translated.push({ id: item.id, description: item.description, text });
+    onProgress?.({ done, total });
+  };
+
+  if (settings.translationEngine === "builtin") {
+    let unavailable = false;
+    let useBatch = true;
+    for (let i = 0; i < total;) {
+      const query = googleParams();
+      const texts: string[] = [];
+      let queryLength = query.toString().length;
+      while (
+        useBatch &&
+        i + texts.length < total &&
+        texts.length < GOOGLE_BATCH_LIMIT
+      ) {
+        const text = pending[i + texts.length].description.trim();
+        queryLength += 1 + new URLSearchParams({ q: text }).toString().length;
+        if (queryLength > GOOGLE_QUERY_LIMIT) break;
+        query.append("q", text);
+        texts.push(text);
+      }
+      if (texts.length) {
+        const results = await translateGoogleBatch(texts, query).catch(
+          () => null,
+        );
+        if (results) {
+          results.forEach((text, index) => record(pending[i + index], text));
+          i += texts.length;
+          continue;
+        }
+        useBatch = false;
+      }
+
+      const group = pending.slice(i, i + (useBatch ? 1 : 4));
+      const results = await Promise.all(
+        group.map((item) =>
+          translateGoogleSingle(item.description.trim()).catch(() => null),
+        ),
+      );
+      if (!useBatch && results.every((text) => text === null)) {
+        unavailable = true;
+        break;
+      }
+      results.forEach((text, index) => record(group[index], text ?? ""));
+      i += group.length;
+    }
+    return { translated, failed: total - translated.length, unavailable };
+  }
+
   for (let i = 0; i < pending.length; i += 2) {
     const batch = pending.slice(i, i + 2);
     await Promise.all(
@@ -370,35 +461,24 @@ export async function translateMissing<
         let result = await translateDescriptionAsync(
           item.name,
           item.description,
+          settings,
         );
         if (!result.text && result.error !== "Missing URL or API Key") {
           await sleep(400);
           result = await translateDescriptionAsync(
             item.name,
             item.description,
+            settings,
           );
         }
-        done += 1;
-        const entry = result.text
-          ? {
-              id: item.id,
-              description: item.description,
-              text: result.text,
-            }
-          : null;
-        if (entry) translated.push(entry);
-        onProgress?.({
-          done,
-          total,
-          newlyTranslated: entry ? [entry] : [],
-        });
+        record(item, result.text);
       }),
     );
     if (i + 2 < pending.length) {
       await sleep(120);
     }
   }
-  return { translated, failed: pending.length - translated.length };
+  return { translated, failed: total - translated.length, unavailable: false };
 }
 
 const PREF_EVENT = "pita:translate-pref";

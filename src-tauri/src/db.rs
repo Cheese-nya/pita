@@ -166,6 +166,14 @@ impl PitaDb {
     }
 
     pub fn save_workspace(&mut self, ws: &Workspace) -> Result<(), PitaError> {
+        self.save_workspace_with_undo(ws, None)
+    }
+
+    pub(crate) fn save_workspace_with_undo(
+        &mut self,
+        ws: &Workspace,
+        undo: Option<&Workspace>,
+    ) -> Result<(), PitaError> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM skills", [])?;
         tx.execute("DELETE FROM projects", [])?;
@@ -220,6 +228,9 @@ impl PitaDb {
             None => "null".to_string(),
         };
         Self::set_meta(&tx, "remote_json", &remote_json)?;
+        if let Some(undo) = undo {
+            Self::set_meta(&tx, "undo_workspace_json", &serde_json::to_string(undo)?)?;
+        }
 
         tx.commit()?;
         Ok(())

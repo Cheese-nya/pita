@@ -25,14 +25,20 @@ import { AuditBadge } from "../components/AuditBadge";
 import { TargetPicker, targetName } from "../components/TargetPicker";
 import { auditSkill } from "../services/audit";
 import {
+  canInstallMarketplace,
   formatInstalls,
+  getCachedMarketplace,
+  getCachedMarketplacePreview,
   githubAvatarUrl,
   loadMarketplace,
   marketplaceMember,
+  loadMarketplacePreview,
   loadMarketplaceRepo,
   isMarketplacePlaceholder,
   type MarketplaceFeed,
   type MarketplaceItem,
+  type MarketplacePage,
+  type MarketplacePreview,
 } from "../services/marketplace";
 import {
   resolveSkillDescription,
@@ -43,12 +49,24 @@ import {
   pitaClient,
   type Inspection,
 } from "../services/pitaClient";
-import { normalizeGitUrl } from "../services/tree";
+import { installSource, inspectInstallSource } from "../services/githubInstall";
 import { errorKey, usePita, useWorkspace } from "../store";
 import type { ScopeTarget } from "../types/domain";
 import { copies, scopeAgents, type Skill } from "../types/workspace";
 
 const Markdown = lazy(() => import("react-markdown"));
+
+function firstMarketplacePage(
+  feed: MarketplaceFeed,
+  query = "",
+): MarketplacePage & { page: number } {
+  return {
+    items: [],
+    hasMore: false,
+    ...getCachedMarketplace(feed, 0, query),
+    page: 0,
+  };
+}
 
 function MarketAvatar({ item }: { item: MarketplaceItem }) {
   const [failed, setFailed] = useState(false);
@@ -352,15 +370,10 @@ export function InstallSkills({
   const [sourceFilter, setSourceFilter] = useState("");
   const [showAllSources, setShowAllSources] = useState(false);
   const [previewItem, setPreviewItem] = useState<MarketplaceItem | null>(null);
-  const [feedState, setFeedState] = useState<{
-    items: MarketplaceItem[];
-    page: number;
-    total?: number;
-    hasMore: boolean;
-  }>({ items: [], page: 0, hasMore: false });
+  const [feedState, setFeedState] = useState(() => firstMarketplacePage("all"));
   const [marketStatus, setMarketStatus] = useState<
     "loading" | "ready" | "error"
-  >("loading");
+  >(() => (getCachedMarketplace("all") ? "ready" : "loading"));
   const [sourceItems, setSourceItems] = useState<MarketplaceItem[]>([]);
   const [sourceStatus, setSourceStatus] = useState<
     "idle" | "loading" | "ready" | "error"
@@ -370,7 +383,7 @@ export function InstallSkills({
   const [shown, setShown] = useState(24);
   const [preview, setPreview] = useState<{
     key: string;
-    skill?: Skill;
+    skill?: MarketplacePreview;
     error?: string;
   }>();
   const [previewRetry, retryPreview] = useState(0);
@@ -428,25 +441,33 @@ export function InstallSkills({
   }, [tab]);
 
   const query = marketQuery.trim();
-  useEffect(() => {
+  const previewExisting = previewItem
+    ? marketplaceMember(previewItem, w.skills)
+    : undefined;
+  function changeMarket(nextFeed: MarketplaceFeed, nextQuery: string) {
+    setFeed(nextFeed);
+    setMarketQuery(nextQuery);
+    setSourceFilter("");
+    const trimmed = nextQuery.trim();
+    if (feed === nextFeed && query === trimmed) return;
     setMarketPage(0);
     setShown(24);
-    setFeedState({ items: [], page: 0, hasMore: false });
-  }, [query, feed]);
+    setFeedState(firstMarketplacePage(nextFeed, trimmed));
+    setMarketStatus(
+      getCachedMarketplace(nextFeed, 0, trimmed) ? "ready" : "loading",
+    );
+  }
 
   useEffect(() => {
     if (tab !== "market" || query.length === 1) return;
     const controller = new AbortController();
-    setMarketStatus("loading");
+    setMarketStatus(
+      getCachedMarketplace(feed, marketPage, query) ? "ready" : "loading",
+    );
     const delay = window.setTimeout(
       async () => {
         try {
-          const result = await loadMarketplace(
-            feed,
-            marketPage,
-            query,
-            controller.signal,
-          );
+          const result = await loadMarketplace(feed, marketPage, query);
           if (controller.signal.aborted) return;
           setFeedState((prior) => ({
             ...result,
@@ -486,12 +507,7 @@ export function InstallSkills({
     setSourceStatus("loading");
     void (async () => {
       try {
-        const result = await loadMarketplace(
-          feed,
-          0,
-          sourceFilter,
-          controller.signal,
-        );
+        const result = await loadMarketplace(feed, 0, sourceFilter);
         if (controller.signal.aborted) return;
         const targetSource = sourceFilter.toLowerCase();
         setSourceItems(
@@ -508,10 +524,9 @@ export function InstallSkills({
   }, [tab, feed, sourceFilter, query, marketRetry]);
 
   useEffect(() => {
-    if (!previewItem?.repoUrl) return;
+    if (!previewItem || !canInstallMarketplace(previewItem)) return;
     let active = true;
-    setPreview(undefined);
-    void loadMarketplaceRepo(
+    void loadMarketplacePreview(
       previewItem,
       pitaClient.inspectGit.bind(pitaClient),
     )
@@ -519,7 +534,8 @@ export function InstallSkills({
         if (active) setPreview({ key: previewItem.key, skill });
       })
       .catch((e) => {
-        if (active) setPreview({ key: previewItem.key, error: errorKey(e) });
+        if (active && !getCachedMarketplacePreview(previewItem))
+          setPreview({ key: previewItem.key, error: errorKey(e) });
       });
     return () => {
       active = false;
@@ -556,11 +572,12 @@ export function InstallSkills({
 
   function openMarket(item: MarketplaceItem) {
     setMarketInstallError("");
+    setPreview(undefined);
     setPreviewItem(item);
   }
 
   async function installMarketItem(item: MarketplaceItem) {
-    if (busy || installingId || !item.repoUrl) return;
+    if (busy || installingId || !canInstallMarketplace(item)) return;
     setInstallingId(item.key);
     setMarketInstallError("");
     try {
@@ -633,18 +650,20 @@ export function InstallSkills({
 
   async function inspectGitRepo() {
     if (gitWorking) return;
-    const normalized = normalizeGitUrl(gitRepoUrl);
-    if (!normalized) {
+    const source = installSource(gitRepoUrl);
+    if (!source) {
       setGitError("invalidUrl");
       gitInputRef.current?.focus();
       return;
     }
-    if (normalized !== gitRepoUrl.trim()) setGitRepoUrl(normalized);
     setGitError("");
     setGitWorking(true);
     try {
-      const parsed = await pitaClient.inspectGit(normalized);
-      setGitResult({ result: parsed, source: normalized });
+      const parsed = await inspectInstallSource(
+        source,
+        pitaClient.inspectGit.bind(pitaClient),
+      );
+      setGitResult({ result: parsed, source: gitRepoUrl.trim() });
     } catch (e) {
       setGitError(errorKey(e));
     } finally {
@@ -652,9 +671,6 @@ export function InstallSkills({
     }
   }
 
-  const previewExisting = previewItem
-    ? marketplaceMember(previewItem, w.skills)
-    : undefined;
   const previewComplete = previewItem
     ? !!previewExisting &&
       !isMarketplacePlaceholder(previewExisting) &&
@@ -662,7 +678,9 @@ export function InstallSkills({
     : false;
 
   const previewResult = preview?.key === previewItem?.key ? preview : undefined;
-  const previewSkill = previewResult?.skill;
+  const previewSkill =
+    previewResult?.skill ??
+    (previewItem ? getCachedMarketplacePreview(previewItem) : undefined);
   const previewDesc =
     previewSkill && resolveSkillDescription(previewSkill, showZh);
 
@@ -732,10 +750,7 @@ export function InstallSkills({
                   key={id}
                   type="button"
                   aria-pressed={feed === id}
-                  onClick={() => {
-                    setSourceFilter("");
-                    setFeed(id);
-                  }}
+                  onClick={() => changeMarket(id, marketQuery)}
                 >
                   <Icon size={13} />
                   {t(key)}
@@ -749,10 +764,7 @@ export function InstallSkills({
                 type="search"
                 value={marketQuery}
                 maxLength={200}
-                onChange={(e) => {
-                  setSourceFilter("");
-                  setMarketQuery(e.target.value);
-                }}
+                onChange={(e) => changeMarket(feed, e.target.value)}
                 placeholder={t("searchMarket")}
                 aria-label={t("searchMarket")}
               />
@@ -835,15 +847,20 @@ export function InstallSkills({
                       type="button"
                       className="market-card-open"
                       onClick={() => openMarket(item)}
-                      aria-label={t("previewSkill", {
-                        name: item.name,
-                        source: item.source,
-                      })}
+                      aria-label={t(
+                        canInstallMarketplace(item)
+                          ? "previewSkillFile"
+                          : "previewSkill",
+                        {
+                          name: item.name,
+                          source: item.source,
+                        },
+                      )}
                     >
                       <MarketAvatar item={item} />
                       <strong title={item.name}>{item.name}</strong>
                     </button>
-                    {item.repoUrl && (
+                    {canInstallMarketplace(item) && (
                       <button
                         type="button"
                         className={
@@ -891,6 +908,9 @@ export function InstallSkills({
                           {t("installedBadge")}
                         </span>
                       )}
+                      {canInstallMarketplace(item) && (
+                        <span className="market-card-file mono">SKILL.md</span>
+                      )}
                     </div>
                   </article>
                 );
@@ -900,11 +920,22 @@ export function InstallSkills({
           {query.length === 1 ? (
             <p role="status">{t("marketMinQuery")}</p>
           ) : effectiveMarketStatus === "loading" ? (
-            <p role="status">{t("marketLoading")}</p>
+            marketItems.length ? null : (
+              <p role="status">{t("marketLoading")}</p>
+            )
           ) : effectiveMarketStatus === "error" ? (
-            <div className="empty panel" role="status">
-              <SearchX />
-              <b>{t("marketUnavailable")}</b>
+            <div
+              className={marketItems.length ? "list-foot" : "empty panel"}
+              role="status"
+            >
+              {!marketItems.length && <SearchX />}
+              <span>
+                {t(
+                  marketItems.length
+                    ? "marketCachedOffline"
+                    : "marketUnavailable",
+                )}
+              </span>
               <button type="button" onClick={() => retryMarket((n) => n + 1)}>
                 {t("retry")}
               </button>
@@ -913,13 +944,7 @@ export function InstallSkills({
             <div className="empty panel">
               <SearchX />
               <b>{t("nothing")}</b>
-              <button
-                type="button"
-                onClick={() => {
-                  setMarketQuery("");
-                  setSourceFilter("");
-                }}
-              >
+              <button type="button" onClick={() => changeMarket(feed, "")}>
                 {t("clear")}
               </button>
             </div>
@@ -988,6 +1013,7 @@ export function InstallSkills({
                 <div className="local-drop-card">
                   <Picker
                     folder={false}
+                    skillArchive
                     onNativePick={
                       isNativeRuntime() && pitaClient.inspectNativePath
                         ? async () => {
@@ -1013,7 +1039,7 @@ export function InstallSkills({
                     }
                     onPick={(files) => inspectLocal(files, true)}
                   />
-                  <small>{t("chooseZip")}</small>
+                  <small>{t("chooseSkillArchive")}</small>
                 </div>
               </fieldset>
               {localWorking && <p role="status">{t("inspecting")}</p>}
@@ -1104,7 +1130,9 @@ export function InstallSkills({
                       className="text-btn compact-link"
                       onClick={() => {
                         setGitError("");
-                        setGitRepoUrl("https://github.com/example/docs");
+                        setGitRepoUrl(
+                          "https://skills.sh/vercel-labs/skills/find-skills",
+                        );
                         gitInputRef.current?.focus();
                       }}
                     >
@@ -1170,46 +1198,58 @@ export function InstallSkills({
                 {t(marketInstallError)}
               </p>
             )}
-            {!previewItem.repoUrl ? (
+            {!canInstallMarketplace(previewItem) ? (
               <p>{t("marketExternalSource")}</p>
-            ) : previewResult?.error ? (
-              <div role="status" className="warning">
-                <p>{t(previewResult.error)}</p>
-                <button
-                  type="button"
-                  onClick={() => retryPreview((n) => n + 1)}
-                >
-                  {t("retry")}
-                </button>
-              </div>
-            ) : !previewSkill ? (
-              <p role="status">{t("inspecting")}</p>
             ) : (
               <>
                 {previewDesc?.display && (
                   <p className="detail-raw-text">{previewDesc.display}</p>
                 )}
-                <dl>
-                  <dt>{t("openSource")}</dt>
-                  <dd className="mono">
-                    {previewSkill.source.type === "git" &&
-                      previewSkill.source.skillPath}
-                  </dd>
-                  <dt>{t("files")}</dt>
-                  <dd>{Object.keys(previewSkill.files).length}</dd>
-                </dl>
-                <AuditBadge report={auditSkill(previewSkill)} />
+                {previewSkill && (
+                  <>
+                    <dl>
+                      {previewSkill.skillPath && (
+                        <>
+                          <dt>{t("openSource")}</dt>
+                          <dd className="mono">{previewSkill.skillPath}</dd>
+                        </>
+                      )}
+                      <dt>{t("files")}</dt>
+                      <dd>{previewSkill.fileCount}</dd>
+                    </dl>
+                    <AuditBadge report={previewSkill.audit} />
+                  </>
+                )}
                 <details className="preview" open>
                   <summary>SKILL.md</summary>
-                  <div className="markdown">
-                    <Suspense fallback={<p role="status">{t("inspecting")}</p>}>
-                      <Markdown>{previewSkill.skillMdPreview}</Markdown>
-                    </Suspense>
-                  </div>
+                  {previewSkill ? (
+                    <div className="markdown">
+                      <Suspense
+                        fallback={<pre>{previewSkill.skillMdPreview}</pre>}
+                      >
+                        <Markdown>{previewSkill.skillMdPreview}</Markdown>
+                      </Suspense>
+                    </div>
+                  ) : previewResult?.error ? (
+                    <div role="status" className="warning">
+                      <p>{t(previewResult.error)}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreview(undefined);
+                          retryPreview((n) => n + 1);
+                        }}
+                      >
+                        {t("retry")}
+                      </button>
+                    </div>
+                  ) : (
+                    <p role="status">{t("marketPreviewLoading")}</p>
+                  )}
                 </details>
               </>
             )}
-            {previewItem.repoUrl && (
+            {canInstallMarketplace(previewItem) && (
               <TargetPicker
                 value={targets}
                 onChange={setTargets}
@@ -1234,28 +1274,31 @@ export function InstallSkills({
               {t("openOnMarket")}
               <ExternalLink size={13} />
             </a>
-            {previewItem.repoUrl && (
+            {canInstallMarketplace(previewItem) && (
               <button
                 type="button"
                 className="primary"
-                disabled={
-                  previewComplete ||
-                  busy ||
-                  installingId !== null ||
-                  (!previewSkill && !previewExisting)
-                }
+                disabled={previewComplete || busy || installingId !== null}
                 onClick={() => void installMarketItem(previewItem)}
               >
-                {previewComplete ? <Check size={14} /> : <Plus size={14} />}
+                {previewComplete ? (
+                  <Check size={14} />
+                ) : installingId === previewItem.key ? (
+                  <Clock size={14} />
+                ) : (
+                  <Plus size={14} />
+                )}
                 {t(
-                  previewComplete
-                    ? "installedBadge"
-                    : previewExisting &&
-                        isMarketplacePlaceholder(previewExisting)
-                      ? "marketRepair"
-                      : targets.length
-                        ? "installCount"
-                        : "libraryCount",
+                  installingId === previewItem.key
+                    ? "marketInstalling"
+                    : previewComplete
+                      ? "installedBadge"
+                      : previewExisting &&
+                          isMarketplacePlaceholder(previewExisting)
+                        ? "marketRepair"
+                        : targets.length
+                          ? "installCount"
+                          : "libraryCount",
                   { n: 1, name: previewItem.name },
                 )}
               </button>

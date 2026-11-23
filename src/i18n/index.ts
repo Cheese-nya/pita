@@ -13,6 +13,12 @@ const messages: Record<string, [string, string]> = {
   notCheckedYet: ["尚未检查更新", "No update check yet"],
   marketLoading: ["正在加载 skills.sh…", "Loading skills.sh…"],
   marketUnavailable: ["暂时无法连接 skills.sh。", "Could not reach skills.sh."],
+  marketCachedOffline: [
+    "无法刷新榜单，正在显示缓存结果。",
+    "Could not refresh the leaderboard. Showing cached results.",
+  ],
+  marketPreviewLoading: ["正在读取 SKILL.md…", "Loading SKILL.md…"],
+  marketInstalling: ["正在下载并安装…", "Downloading and installing…"],
   marketRepoUnavailable: [
     "暂时无法读取 GitHub 仓库。",
     "Could not read the GitHub repository.",
@@ -21,6 +27,11 @@ const messages: Record<string, [string, string]> = {
     "仓库中找不到匹配的 Skill。",
     "No matching skill found in the repository.",
   ],
+  gitSourceNotFound: ["找不到指定的仓库、分支或文件。", "The repository, ref, or file could not be found."],
+  gitApiLimited: ["GitHub 请求受限，请稍后重试。", "GitHub is limiting requests. Try again later."],
+  downloadFailed: ["无法完整下载 Skill 文件，请重试。", "Could not download all skill files. Try again."],
+  sourceTooLarge: ["来源文件超出安装大小限制。", "The source files exceed the installation size limit."],
+  gitDesktopOnly: ["请用 Pita 桌面版安装此 Git 来源。", "Use the Pita desktop app to install this Git source."],
   marketMinQuery: [
     "输入至少 2 个字符搜索市场。",
     "Enter at least 2 characters to search.",
@@ -49,6 +60,10 @@ const messages: Record<string, [string, string]> = {
   translationUnavailable: [
     "暂时无法生成译文。可以重试或手动编辑。",
     "Could not translate the description. Try again or edit it manually.",
+  ],
+  googleTranslationUnavailable: [
+    "暂时无法从 Google 翻译获取译文。请检查网络后重试。",
+    "Could not get translations from Google. Check your connection and retry.",
   ],
   translateWithGoogle: ["用 Google 翻译", "Translate with Google"],
   translatedSomeReceipt: ["已保存可用译文", "Saved available translations"],
@@ -139,16 +154,20 @@ const messages: Record<string, [string, string]> = {
     "查看 {{name}} 详情 · {{source}}",
     "Preview {{name}} · {{source}}",
   ],
+  previewSkillFile: [
+    "查看 {{name}} 的 SKILL.md · {{source}}",
+    "Preview SKILL.md for {{name}} · {{source}}",
+  ],
   openOnMarket: ["在 skills.sh 查看", "View on skills.sh"],
   installsCount: ["{{n}} 次安装", "{{n}} installs"],
   backToScope: ["返回 {{name}}", "Back to {{name}}"],
   localInstallSub: [
-    "选择本地 Skill 目录或 .zip 压缩包，解析后可预览成员并选择部署目标。",
-    "Pick a local skill folder or .zip archive to review skills before deploying.",
+    "选择本地 Skill 目录、.zip 或 .skill 压缩包，预览后选择部署目标。",
+    "Pick a local skill folder, .zip, or .skill archive to review before deploying.",
   ],
   gitInstallSub: [
-    "输入包含一个或多个 SKILL.md 的 HTTPS Git 仓库地址。",
-    "Enter an HTTPS Git repository URL containing one or more SKILL.md files.",
+    "粘贴 Git 仓库、GitHub 子目录或 skills.sh 技能链接。",
+    "Paste a Git repository, a GitHub folder, or a skills.sh skill link.",
   ],
   install: ["安装", "Install"],
   estimatedTokens: ["估算 Token", "Est. tokens"],
@@ -562,13 +581,15 @@ const messages: Record<string, [string, string]> = {
   git: ["Git 仓库 URL", "Git repository URL"],
   folder: ["本地文件夹", "Local folder"],
   zip: ["压缩包 (.zip)", "ZIP archive"],
+  website: ["网站来源", "Website"],
   inspect: ["解析仓库", "Inspect repository"],
   sampleGit: [
-    "模拟解析将返回两个示例子目录。",
-    "The mock repository returns two sample skill directories.",
+    "可以用 find-skills 试用 Git 来源预览。",
+    "Try previewing find-skills from a Git source.",
   ],
   chooseFolder: ["选择文件夹", "Choose folder"],
   chooseZip: ["选择 ZIP 文件", "Choose ZIP file"],
+  chooseSkillArchive: ["选择 .zip / .skill 文件", "Choose .zip / .skill file"],
   chooseMembers: ["选择导入的 Skills", "Select skills to import"],
   targets: ["同时部署到", "Deploy to"],
   centralOnly: [

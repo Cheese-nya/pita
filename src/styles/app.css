@@ -3474,6 +3474,11 @@ dd {
   flex-wrap: wrap;
   margin-top: auto;
 }
+.market-card-file {
+  margin-inline-start: auto;
+  color: var(--text-2);
+  font-size: 11px;
+}
 .market-source-tag {
   min-height: 22px;
   padding: 1px 7px;

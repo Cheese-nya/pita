@@ -4,7 +4,7 @@ import tailwind from "@tailwindcss/vite";
 
 const previewProxies = {
   "/marketplace-api/": {
-    target: "https://skills.sh",
+    target: "https://www.skills.sh",
     changeOrigin: true,
     rewrite: (path: string) => path.replace("/marketplace-api/", "/api/"),
   },
@@ -12,6 +12,17 @@ const previewProxies = {
     target: "https://codeload.github.com",
     changeOrigin: true,
     rewrite: (path: string) => path.replace("/marketplace-archive/", "/"),
+  },
+  "/google-translate/batch": {
+    target: "https://clients5.google.com",
+    changeOrigin: true,
+    rewrite: (path: string) =>
+      path.replace("/google-translate/batch", "/translate_a/t"),
+  },
+  "/google-translate/single": {
+    target: "https://translate.googleapis.com",
+    changeOrigin: true,
+    rewrite: () => "/translate_a/single",
   },
 };
 

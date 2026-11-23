@@ -18,7 +18,7 @@ import {
   pitaClient,
   type Inspection,
 } from "../services/pitaClient";
-import { normalizeGitUrl } from "../services/tree";
+import { installSource, inspectInstallSource } from "../services/githubInstall";
 import { errorKey, usePita, useWorkspace } from "../store";
 import type { ScopeTarget } from "../types/domain";
 import { copies, scopeAgents } from "../types/workspace";
@@ -89,15 +89,18 @@ export function AddSkill({
   }
   function inspectUrl() {
     if (working) return;
-    const normalized = normalizeGitUrl(url);
-    if (!normalized) {
+    const target = installSource(url);
+    if (!target) {
       setError("invalidUrl");
       sourceInput.current?.focus();
       return;
     }
-    if (normalized !== url.trim()) setUrl(normalized);
     if (result && !fromLibrary) setReview(true);
-    else void inspect(pitaClient.inspectGit(normalized), normalized);
+    else
+      void inspect(
+        inspectInstallSource(target, pitaClient.inspectGit.bind(pitaClient)),
+        url.trim(),
+      );
   }
   const from = result?.skills ?? [];
   const nameCounts = new Map<string, number>();
@@ -225,7 +228,9 @@ export function AddSkill({
                           className="text-btn compact-link"
                           onClick={() => {
                             reset();
-                            setUrl("https://github.com/example/docs");
+                            setUrl(
+                              "https://skills.sh/vercel-labs/skills/find-skills",
+                            );
                             sourceInput.current?.focus();
                           }}
                         >
@@ -238,6 +243,7 @@ export function AddSkill({
                   <>
                     <Picker
                       folder={tab === "folder"}
+                      skillArchive={tab === "zip"}
                       onNativePick={
                         isNativeRuntime() && pitaClient.inspectNativePath
                           ? async () => {
@@ -356,7 +362,9 @@ export function AddSkill({
                                 ? skill.source.skillPath
                                 : skill.description}
                         </small>
-                        {!fromLibrary && <AuditBadge report={auditSkill(skill)} />}
+                        {!fromLibrary && (
+                          <AuditBadge report={auditSkill(skill)} />
+                        )}
                       </span>
                     </label>
                   );

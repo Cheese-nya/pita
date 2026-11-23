@@ -61,7 +61,9 @@ const builtinAgent = z.enum([
 ]);
 const customAgent = z
   .string()
-  .regex(/^custom:[a-z0-9][a-z0-9_-]{0,47}$/) as unknown as z.ZodType<`custom:${string}`>;
+  .regex(
+    /^custom:[a-z0-9][a-z0-9_-]{0,47}$/,
+  ) as unknown as z.ZodType<`custom:${string}`>;
 const agent = z.union([builtinAgent, customAgent]);
 const scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("global-agent"), agentId: agent }),
@@ -78,6 +80,7 @@ const source = z.discriminatedUnion("type", [
     skillPath: z.string(),
   }),
   z.object({ type: z.literal("local"), originPath: z.string().optional() }),
+  z.object({ type: z.literal("website"), url: z.url() }),
   z.object({ type: z.literal("unknown") }),
 ]);
 const entry = z.object({
@@ -166,7 +169,9 @@ export async function manifest(w: Workspace) {
             ? s.source.repoUrl
             : s.source.type === "local"
               ? (s.source.originPath ?? null)
-              : null,
+              : s.source.type === "website"
+                ? s.source.url
+                : null,
         sourceType: s.source.type,
         skillPath: s.source.type === "git" ? s.source.skillPath : s.id,
         computedHash: s.centralHash,
@@ -296,12 +301,30 @@ export async function restore(
   }
 }
 export async function importTrees(entries: Files, local: boolean) {
+  const normalized: Files = Object.create(null);
+  const paths = new Set<string>();
+  for (const [path, content] of Object.entries(entries)) {
+    const parts = path
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter((p) => p !== ".");
+    if (parts.some((part) => !part || part === ".." || /[:\u0000]/.test(part)))
+      throw Error("invalidBundle");
+    if (parts[0] === "__MACOSX" || parts.at(-1) === ".DS_Store") continue;
+    if (parts.at(-1)?.toLowerCase() === "skill.md")
+      parts[parts.length - 1] = "SKILL.md";
+    const key = parts.join("/");
+    if (!key || paths.has(key.toLowerCase())) throw Error("invalidBundle");
+    paths.add(key.toLowerCase());
+    normalized[key] = content;
+  }
+  entries = normalized;
   const roots = Object.keys(entries)
     .filter((p) => p === "SKILL.md" || p.endsWith("/SKILL.md"))
     .map((p) => p.slice(0, -8));
   if (!roots.length) throw Error("invalidSkill");
   const parsed = await Promise.allSettled(
-    roots.map((root) => {
+    roots.map(async (root) => {
       const tree = Object.fromEntries(
         Object.entries(entries)
           .filter(
@@ -313,6 +336,18 @@ export async function importTrees(entries: Files, local: boolean) {
           )
           .map(([p, v]) => [p.slice(root.length), v]),
       );
+      const payloads = Object.values(tree);
+      const sizes = payloads.map(
+        (content) =>
+          Math.floor((content.length * 3) / 4) -
+          (content.endsWith("==") ? 2 : content.endsWith("=") ? 1 : 0),
+      );
+      if (
+        payloads.length > 200 ||
+        sizes.some((size) => size > 2 * 1024 * 1024) ||
+        sizes.reduce((sum, size) => sum + size, 0) > 10 * 1024 * 1024
+      )
+        throw Error("sourceTooLarge");
       return makeSkill(tree, {
         type: "local",
         originPath: local ? root.replace(/\/$/, "") : undefined,

@@ -5,8 +5,8 @@ use crate::domain::{
     SkillSource, Workspace,
 };
 use crate::tree::{
-    decode_bytes as decode_b64, discover_skill_dirs, encode_bytes as encode_b64, hash_tree,
-    make_skill, normalize_skill_id, read_dir_tree, safe_rel_path,
+    decode_bytes as decode_b64, discover_import_skill_dirs, discover_skill_dirs,
+    encode_bytes as encode_b64, hash_tree, make_skill, normalize_skill_id, safe_rel_path,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -15,6 +15,8 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+pub(crate) const MAX_IMPORT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +62,7 @@ pub fn build_manifest(w: &Workspace) -> SkillsLockManifest {
                 SkillSource::Local { origin_path } => {
                     (origin_path.clone(), "local".into(), s.id.clone())
                 }
+                SkillSource::Website { url } => (Some(url.clone()), "website".into(), s.id.clone()),
                 SkillSource::Unknown => (None, "unknown".into(), s.id.clone()),
             };
             LockSkillEntry {
@@ -312,6 +315,22 @@ pub fn read_backup_zip(
 }
 
 pub fn import_entries(entries: Files, local: bool) -> Result<Inspection, PitaError> {
+    let mut normalized = Files::new();
+    let mut paths = HashSet::new();
+    for (path, bytes) in entries {
+        let safe = safe_rel_path(&path)?;
+        let safe = safe.to_string_lossy().replace('\\', "/");
+        let name = safe.rsplit('/').next().unwrap_or_default();
+        let mut canonical = safe.clone();
+        if name.eq_ignore_ascii_case("SKILL.md") {
+            canonical.replace_range(safe.len() - name.len().., "SKILL.md");
+        }
+        if !paths.insert(canonical.to_lowercase()) {
+            return Err(PitaError::InvalidBundle);
+        }
+        normalized.insert(canonical, bytes);
+    }
+    let entries = normalized;
     let mut roots: Vec<String> = entries
         .keys()
         .filter(|p| p.as_str() == "SKILL.md" || p.ends_with("/SKILL.md"))
@@ -325,7 +344,10 @@ pub fn import_entries(entries: Files, local: bool) -> Result<Inspection, PitaErr
     let mut skills = Vec::new();
     let mut rejected = Vec::new();
     for root in &roots {
+        use crate::tree::{MAX_FILES_PER_SKILL, MAX_FILE_BYTES, MAX_TOTAL_SKILL_BYTES};
         let mut tree: Files = Files::new();
+        let mut total = 0u64;
+        let mut oversized = false;
         for (p, v) in &entries {
             if !p.starts_with(root) {
                 continue;
@@ -336,7 +358,21 @@ pub fn import_entries(entries: Files, local: bool) -> Result<Inspection, PitaErr
             if nested {
                 continue;
             }
+            let len = (v.len() as u64 / 4 * 3)
+                .saturating_sub(u64::from(v.ends_with('=')) + u64::from(v.ends_with("==")));
+            total += len;
+            if len > MAX_FILE_BYTES
+                || total > MAX_TOTAL_SKILL_BYTES
+                || tree.len() >= MAX_FILES_PER_SKILL
+            {
+                oversized = true;
+                break;
+            }
             tree.insert(p[root.len()..].to_string(), v.clone());
+        }
+        if oversized {
+            rejected.push(format!("{}SKILL.md", root));
+            continue;
         }
         let origin_path = if local {
             let trimmed = root.trim_end_matches('/');
@@ -363,19 +399,38 @@ pub fn import_entries(entries: Files, local: bool) -> Result<Inspection, PitaErr
 pub fn import_zip_bytes(bytes: &[u8]) -> Result<Inspection, PitaError> {
     let reader = Cursor::new(bytes);
     let mut archive = ZipArchive::new(reader).map_err(|_| PitaError::InvalidSkill)?;
+    if archive.len() > 8192 || bytes.len() as u64 > MAX_IMPORT_ARCHIVE_BYTES {
+        return Err(PitaError::Internal("sourceTooLarge".into()));
+    }
     let mut entries: Files = Files::new();
+    let mut remaining = MAX_IMPORT_ARCHIVE_BYTES;
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|_| PitaError::InvalidSkill)?;
+        let file = archive.by_index(i).map_err(|_| PitaError::InvalidSkill)?;
         if file.is_dir() {
             continue;
         }
         let name = file.name().replace('\\', "/");
-        if safe_rel_path(&name).is_err() {
+        safe_rel_path(&name)?;
+        if name.starts_with("__MACOSX/") || name.ends_with("/.DS_Store") {
             continue;
         }
+        if file
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+            || entries.contains_key(&name)
+        {
+            return Err(PitaError::InvalidBundle);
+        }
+        if file.size() > remaining {
+            return Err(PitaError::Internal("sourceTooLarge".into()));
+        }
         let mut content = Vec::new();
-        file.read_to_end(&mut content)
+        file.take(remaining + 1)
+            .read_to_end(&mut content)
             .map_err(|_| PitaError::InvalidSkill)?;
+        remaining = remaining
+            .checked_sub(content.len() as u64)
+            .ok_or_else(|| PitaError::Internal("sourceTooLarge".into()))?;
         entries.insert(name, encode_b64(&content));
     }
     import_entries(entries, false)
@@ -383,7 +438,7 @@ pub fn import_zip_bytes(bytes: &[u8]) -> Result<Inspection, PitaError> {
 
 pub fn import_local_folder(dir: &Path) -> Result<Inspection, PitaError> {
     // Discover SKILL.md roots first so large local monorepos never truncate at 200 files (#608).
-    let skill_dirs = discover_skill_dirs(dir);
+    let skill_dirs = discover_import_skill_dirs(dir);
     if skill_dirs.is_empty() {
         return Err(PitaError::InvalidSkill);
     }
@@ -391,9 +446,15 @@ pub fn import_local_folder(dir: &Path) -> Result<Inspection, PitaError> {
     let mut rejected = Vec::new();
     for skill_dir in skill_dirs {
         let origin = skill_dir.to_string_lossy().to_string();
-        match read_dir_tree(&skill_dir)
-            .and_then(|tree| make_skill(tree, SkillSource::Local { origin_path: Some(origin.clone()) }, None))
-        {
+        match crate::tree::read_skill_tree(&skill_dir).and_then(|tree| {
+            make_skill(
+                tree,
+                SkillSource::Local {
+                    origin_path: Some(origin.clone()),
+                },
+                None,
+            )
+        }) {
             Ok(s) => skills.push(s),
             Err(_) => rejected.push(format!("{}/SKILL.md", origin)),
         }

@@ -84,7 +84,12 @@ export const usePita = create<Store>((set, get) => ({
         receipt: {
           key,
           detail: details,
-          undo: !["scan", "rescanProject", "check"].includes(c.type),
+          undo: ![
+            "scan",
+            "rescanProject",
+            "check",
+            "saveTranslations",
+          ].includes(c.type),
         },
       });
       return true;
@@ -157,6 +162,12 @@ const KNOWN_ERROR_KEYS = new Set([
   "marketRepoUnavailable",
   "marketSkillMissing",
   "marketExternalSource",
+  "gitSourceNotFound",
+  "gitApiLimited",
+  "gitDesktopOnly",
+  "downloadFailed",
+  "sourceTooLarge",
+  "sourceCollision",
   "hookUnsupported",
   "contentConflict",
 ]);

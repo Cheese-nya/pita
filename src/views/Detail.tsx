@@ -565,7 +565,9 @@ export function Detail({
                       ? s.source.skillPath
                       : s.source.type === "local"
                         ? s.source.originPath || s.name
-                        : t("unknown")}
+                        : s.source.type === "website"
+                          ? <a href={s.source.url} target="_blank" rel="noreferrer">{t("openOnMarket")}</a>
+                          : t("unknown")}
                   </dd>
                 </dl>
                 <details className="preview" open>

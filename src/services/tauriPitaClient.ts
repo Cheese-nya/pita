@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  open as openDialog,
+  save as saveDialog,
+} from "@tauri-apps/plugin-dialog";
 import type { AgentId } from "../types/domain";
 import type { Workspace } from "../types/workspace";
 import type { Command } from "./commands";
@@ -12,7 +15,7 @@ import type {
   UsageSummary,
 } from "./pitaClient";
 import { ALL_AGENT_IDS, getSettings } from "./settings";
-import { encode } from "./tree";
+import { encode, MAX_IMPORT_ARCHIVE_BYTES } from "./tree";
 import { translateDescriptionAsync } from "./translator";
 
 function runtimeContext() {
@@ -107,6 +110,8 @@ export class TauriPitaClient implements PitaClient {
   async inspectFiles(files: File[], zip: boolean): Promise<Inspection> {
     if (!files.length) throw Error("invalidSkill");
     if (zip) {
+      if (files[0].size > MAX_IMPORT_ARCHIVE_BYTES)
+        throw Error("sourceTooLarge");
       const bytes = Array.from(new Uint8Array(await files[0].arrayBuffer()));
       return invoke<Inspection>("inspect_zip_bytes", { bytes });
     }
@@ -130,7 +135,9 @@ export class TauriPitaClient implements PitaClient {
     const selected = await openDialog({
       directory: !zip,
       multiple: false,
-      filters: zip ? [{ name: "ZIP Archive", extensions: ["zip"] }] : undefined,
+      filters: zip
+        ? [{ name: "Skill Archive", extensions: ["zip", "skill"] }]
+        : undefined,
     });
     if (!selected || typeof selected !== "string") return null;
     const inspection = await invoke<Inspection>("inspect_local_path", {

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Languages } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { pitaClient } from "../services/pitaClient";
 import { useSettings } from "../services/settings";
 import { needsTranslation, translateMissing } from "../services/translator";
 import { usePita } from "../store";
@@ -9,7 +8,7 @@ import type { Skill } from "../types/workspace";
 
 export function TranslateSkillsButton({ skills }: { skills: Skill[] }) {
   const { t } = useTranslation();
-  const { busy, notify } = usePita();
+  const { busy, notify, run } = usePita();
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState<{
     done: number;
@@ -32,74 +31,50 @@ export function TranslateSkillsButton({ skills }: { skills: Skill[] }) {
         if (!targetPending.length) return;
         setWorking(true);
         setProgress({ done: 0, total: targetPending.length });
-        const buffer: { id: string; description: string; text: string }[] = [];
-        let flushChain = Promise.resolve();
-        let savedCount = 0;
-
-        const queueFlush = (
-          entries: { id: string; description: string; text: string }[],
-        ) => {
-          if (!entries.length) return;
-          flushChain = flushChain.then(async () => {
-            try {
-              const nextWs = await pitaClient.execute({
-                type: "saveTranslations",
-                entries,
-              });
-              savedCount += entries.length;
-              usePita.setState({ w: nextWs });
-            } catch {
-              /* keep processing remaining translations */
-            }
-          });
-        };
-
         try {
-          const { translated, failed } = await translateMissing(
+          const { translated, failed, unavailable } = await translateMissing(
             targetPending,
-            (info) => {
-              setProgress({ done: info.done, total: info.total });
-              if (info.newlyTranslated.length) {
-                buffer.push(...info.newlyTranslated);
-                if (buffer.length >= 6) {
-                  queueFlush(buffer.splice(0, buffer.length));
-                }
-              }
-            },
+            setProgress,
           );
-          if (buffer.length) {
-            queueFlush(buffer.splice(0, buffer.length));
-          }
-          await flushChain;
-
-          if (!savedCount && translated.length) {
-            try {
-              const nextWs = await pitaClient.execute({
-                type: "saveTranslations",
-                entries: translated,
-              });
-              savedCount = translated.length;
-              usePita.setState({ w: nextWs });
-            } catch {
-              /* report unavailability below */
-            }
-          }
-
-          if (!translated.length || !savedCount) {
+          if (!translated.length) {
             notify({
-              key: "translationUnavailable",
+              key: unavailable
+                ? "googleTranslationUnavailable"
+                : "translationUnavailable",
               detail: "",
               error: true,
               undo: false,
             });
-          } else {
-            notify({
-              key: failed ? "translatedSomeReceipt" : "translatedAllReceipt",
-              detail: failed
-                ? t("translationFailedCount", { n: failed })
-                : String(savedCount),
-              undo: false,
+            return;
+          }
+
+          if (usePita.getState().busy) {
+            await new Promise<void>((resolve) => {
+              const unsubscribe = usePita.subscribe((state) => {
+                if (state.busy) return;
+                unsubscribe();
+                resolve();
+              });
             });
+          }
+          const current = new Map(
+            usePita.getState().w?.skills.map((s) => [s.id, s]),
+          );
+          const entries = translated.filter((entry) => {
+            const skill = current.get(entry.id);
+            return (
+              skill?.description === entry.description &&
+              needsTranslation(skill)
+            );
+          });
+          if (entries.length) {
+            await run(
+              { type: "saveTranslations", entries },
+              failed ? "translatedSomeReceipt" : "translatedAllReceipt",
+              failed
+                ? t("translationFailedCount", { n: failed })
+                : String(entries.length),
+            );
           }
         } finally {
           setWorking(false);

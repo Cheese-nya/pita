@@ -2,6 +2,7 @@ use crate::adapters::expand_tilde;
 use crate::archive::{
     build_manifest, detect_projects_from_dir, detect_projects_from_paths, export_zip_bytes,
     import_entries, import_local_folder, import_zip_bytes, read_backup_zip, SkillsLockManifest,
+    MAX_IMPORT_ARCHIVE_BYTES,
 };
 use crate::audit::{audit_files, SkillAuditReport};
 use crate::domain::{
@@ -18,9 +19,77 @@ use crate::logger::{log_error, logs_dir};
 use crate::secrets::get_remote_token;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
+
+pub(crate) fn public_http_client() -> Result<&'static reqwest::Client, &'static str> {
+    static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .https_only(true)
+                .connect_timeout(Duration::from_secs(4))
+                .timeout(Duration::from_secs(12))
+                .build()
+        })
+        .as_ref()
+        .map_err(|_| "httpClientUnavailable")
+}
+
+pub(crate) async fn read_remote_bytes(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "downloadFailed")? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
+            return Err("sourceTooLarge".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+#[tauri::command]
+pub async fn github_install_fetch(path: String, raw: bool) -> Result<tauri::ipc::Response, String> {
+    let (host, limit) = if raw {
+        ("raw.githubusercontent.com", 2 * 1024 * 1024)
+    } else {
+        ("api.github.com", 16 * 1024 * 1024)
+    };
+    let url = url::Url::parse(&format!("https://{host}/{path}")).map_err(|_| "invalidUrl")?;
+    if url.host_str() != Some(host) || path.starts_with('/') {
+        return Err("invalidUrl".into());
+    }
+    let response = public_http_client()?
+        .get(url)
+        .header("User-Agent", "Pita Skills Manager")
+        .send()
+        .await
+        .map_err(|_| "marketRepoUnavailable")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("gitSourceNotFound".into());
+    }
+    if matches!(
+        response.status(),
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::TOO_MANY_REQUESTS
+    ) {
+        return Err("gitApiLimited".into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|_| "marketRepoUnavailable")?;
+    Ok(tauri::ipc::Response::new(
+        read_remote_bytes(response, limit).await?,
+    ))
+}
+
+#[tauri::command]
+pub async fn inspect_site_skill(domain: String, slug: String) -> Result<Inspection, String> {
+    crate::site_install::inspect(&domain, &slug).await
+}
 
 #[tauri::command]
 pub async fn detect_installed_agents(ctx: RuntimeContext) -> Result<Vec<AgentId>, String> {
@@ -48,15 +117,15 @@ pub async fn marketplace_feed(
     {
         return Err("marketUnavailable".into());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .build()
-        .map_err(|_| "marketUnavailable")?;
+    let client = public_http_client().map_err(|_| "marketUnavailable")?;
     let request = if query.is_empty() {
-        client.get(format!("https://skills.sh/api/skills/{}/{}", view, page))
+        client.get(format!(
+            "https://www.skills.sh/api/skills/{}/{}",
+            view, page
+        ))
     } else {
         client
-            .get("https://skills.sh/api/search")
+            .get("https://www.skills.sh/api/search")
             .query(&[("q", query), ("limit", "80")])
     };
     request
@@ -70,26 +139,94 @@ pub async fn marketplace_feed(
         .map_err(|_| "marketUnavailable".into())
 }
 
+#[tauri::command]
+pub async fn marketplace_preview(
+    source: String,
+    slug: String,
+) -> Result<serde_json::Value, String> {
+    const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+    const ERROR: &str = "marketRepoUnavailable";
+    let (owner, repo) = source.split_once('/').ok_or(ERROR)?;
+    for segment in [owner, repo, slug.as_str()] {
+        if segment.is_empty() || matches!(segment, "." | "..") || segment.contains('/') {
+            return Err(ERROR.into());
+        }
+    }
+    let mut url = url::Url::parse("https://www.skills.sh/api/download").map_err(|_| ERROR)?;
+    url.path_segments_mut()
+        .map_err(|_| ERROR)?
+        .extend([owner, repo, slug.as_str()]);
+    let response = public_http_client()
+        .map_err(|_| ERROR)?
+        .get(url)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| ERROR)?;
+    let body = read_remote_bytes(response, MAX_SNAPSHOT_BYTES).await?;
+    serde_json::from_slice(&body).map_err(|_| ERROR.into())
+}
+
 const TRANSLATE_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 #[tauri::command]
+pub async fn translate_google_batch(texts: Vec<String>) -> Result<serde_json::Value, String> {
+    const ERROR: &str = "translationUnavailable";
+    if texts.is_empty()
+        || texts.len() > 12
+        || texts.iter().map(String::len).sum::<usize>() > 4_500
+        || texts.iter().any(|text| text.trim().is_empty())
+    {
+        return Err(ERROR.into());
+    }
+    let mut query = vec![
+        ("client", "dict-chrome-ex"),
+        ("sl", "auto"),
+        ("tl", "zh-CN"),
+    ];
+    query.extend(texts.iter().map(|text| ("q", text.as_str())));
+    let client = public_http_client().map_err(|_| ERROR)?;
+    for endpoint in [
+        "https://clients5.google.com/translate_a/t",
+        "https://translate.googleapis.com/translate_a/t",
+    ] {
+        let Ok(response) = client
+            .get(endpoint)
+            .header("User-Agent", TRANSLATE_USER_AGENT)
+            .timeout(Duration::from_secs(5))
+            .query(&query)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+        else {
+            continue;
+        };
+        if let Ok(rows) = response.json::<Vec<(String, String)>>().await {
+            if rows.len() == texts.len() {
+                return Ok(serde_json::json!(rows));
+            }
+        }
+    }
+    Err(ERROR.into())
+}
+
+#[tauri::command]
 pub async fn translate_description(text: String) -> Result<serde_json::Value, String> {
-    if text.trim().is_empty() || text.chars().count() > 4_000 {
+    if text.trim().is_empty() || text.len() > 24_000 {
         return Err("translationUnavailable".into());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .build()
-        .map_err(|_| "translationUnavailable")?;
+    let client = public_http_client().map_err(|_| "translationUnavailable")?;
 
     for endpoint in [
         "https://translate.googleapis.com/translate_a/single",
         "https://translate.google.com/translate_a/single",
     ] {
         let Ok(resp) = client
-            .get(endpoint)
+            .post(endpoint)
             .header("User-Agent", TRANSLATE_USER_AGENT)
-            .query(&[
+            .timeout(Duration::from_secs(5))
+            .form(&[
                 ("client", "gtx"),
                 ("sl", "auto"),
                 ("tl", "zh-CN"),
@@ -181,6 +318,10 @@ pub async fn inspect_local_path(path: String) -> Result<Inspection, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let p = expand_tilde(&path);
         if p.is_file() {
+            let size = std::fs::metadata(&p).map_err(|e| e.to_string())?.len();
+            if size > MAX_IMPORT_ARCHIVE_BYTES {
+                return Err("sourceTooLarge".into());
+            }
             let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
             import_zip_bytes(&bytes).map_err(map_err)
         } else {

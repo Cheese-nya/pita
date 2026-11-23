@@ -2,6 +2,10 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.3.0-beta.4] - 2026-11-23 (Pre-release)
+
+- Fixed marketplace skill cards in Install Skills so clicking anywhere on a card (not just the top title header) opens the right-hand preview drawer, while preserving install and source-filter button actions.
+
 ## [0.3.0-beta.3] - 2026-11-23 (Pre-release)
 
 - Marketplace cards show excerpts from `SKILL.md` and load previews as cards enter view.

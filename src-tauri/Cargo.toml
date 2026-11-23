@@ -1,6 +1,6 @@
 [package]
 name = "pita"
-version = "0.3.0-beta.3"
+version = "0.3.0-beta.4"
 description = "Pita — Cross-Agent Skills Manager"
 authors = ["Pita Contributors"]
 license = "MIT"

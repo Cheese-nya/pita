@@ -198,9 +198,9 @@ button:where(:hover:not(:disabled)),
 }
 
 button:where(
-  :active:not(:disabled):not(.skill-name):not(.sidebar-item):not(
-      .metric-cell
-    ):not(.nav-scrim):not(.project-drag-handle)
+  :active:not(:disabled):not(.skill-name):not(.market-card-open):not(
+      .sidebar-item
+    ):not(.metric-cell):not(.nav-scrim):not(.project-drag-handle)
 ) {
   transform: scale(0.98);
 }
@@ -3447,22 +3447,23 @@ dd {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  cursor: pointer;
   transition: border-color var(--dur-fast) ease;
 }
 .market-card-open {
   width: 100%;
   min-width: 0;
+  min-height: var(--control-h-s);
   justify-content: flex-start;
+  text-align: left;
   border: 0;
   box-shadow: none;
   background: transparent;
   padding: 0 35px 0 0;
+  border-radius: 0;
 }
-.market-card-open::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-m);
+.market-card-open:hover:not(:disabled) {
+  background: transparent;
 }
 .market-card-open strong {
   overflow: hidden;
@@ -3473,10 +3474,6 @@ dd {
   position: absolute;
   top: 12px;
   right: 13px;
-  z-index: 1;
-}
-.market-card-foot > button {
-  position: relative;
   z-index: 1;
 }
 .market-drawer-body {

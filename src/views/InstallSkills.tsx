@@ -843,7 +843,19 @@ export function InstallSkills({
                       { name: item.name },
                     );
                 return (
-                  <article className="market-card" key={item.key}>
+                  <article
+                    className="market-card"
+                    key={item.key}
+                    onClick={(e) => {
+                      if (
+                        (e.target as HTMLElement).closest(
+                          "button, a, input, select, textarea, [role='button']",
+                        )
+                      )
+                        return;
+                      openMarket(item);
+                    }}
+                  >
                     <button
                       type="button"
                       className="market-card-open"

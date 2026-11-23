@@ -32,15 +32,16 @@ export const ALL_AGENT_IDS: BuiltinAgentId[] = [
   "claude-code",
   "codex",
   "antigravity",
+  "dsh",
+  "workbuddy",
+  "opencode",
   "trae",
   "hermes",
   "pi",
   "openclaw",
   "qoder",
-  "workbuddy",
   "t3-code",
   "gemini-cli",
-  "opencode",
   "windsurf",
   "codex-cli",
   "claude-cli",
@@ -51,18 +52,20 @@ export const DEFAULT_ENABLED_AGENTS: BuiltinAgentId[] = [
   "claude-code",
   "codex",
   "antigravity",
+  "dsh",
+  "workbuddy",
+  "opencode",
   "trae",
   "hermes",
   "pi",
   "openclaw",
-  "qoder",
-  "workbuddy",
-  "t3-code",
 ];
 
 export interface PitaSettings {
   agentOrder: AgentId[];
   enabledAgents: AgentId[];
+  userReorderedAgents: boolean;
+  projectOrder: string[];
   customPaths: Partial<Record<AgentId, string>>;
   customHarnesses: CustomHarness[];
   themeMode: ThemeMode;
@@ -98,6 +101,8 @@ function defaultSettings(): PitaSettings {
   return {
     agentOrder: [...ALL_AGENT_IDS],
     enabledAgents: [...DEFAULT_ENABLED_AGENTS],
+    userReorderedAgents: false,
+    projectOrder: [],
     customPaths: {},
     customHarnesses: [],
     themeMode: legacyTheme,
@@ -148,23 +153,62 @@ function loadSettings(): PitaSettings {
           knownIds.includes(a as AgentId),
         )
       : [];
+    const dedupedOrder = Array.from(new Set(parsedOrder));
+    if (
+      Array.isArray(parsed.agentOrder) &&
+      !parsed.agentOrder.includes("dsh") &&
+      !dedupedOrder.includes("dsh")
+    ) {
+      const agIdx = dedupedOrder.indexOf("antigravity");
+      const insertAt = agIdx >= 0 ? agIdx + 1 : Math.min(3, dedupedOrder.length);
+      dedupedOrder.splice(insertAt, 0, "dsh");
+    }
     const agentOrder: AgentId[] = [
-      ...Array.from(new Set(parsedOrder)),
-      ...knownIds.filter((a) => !parsedOrder.includes(a)),
+      ...dedupedOrder,
+      ...knownIds.filter((a) => !dedupedOrder.includes(a)),
     ];
     const validAgents = Array.isArray(parsed.enabledAgents)
-      ? parsed.enabledAgents.filter((a): a is AgentId =>
-          knownIds.includes(a as AgentId),
+      ? Array.from(
+          new Set(
+            parsed.enabledAgents.filter((a): a is AgentId =>
+              knownIds.includes(a as AgentId),
+            ),
+          ),
         )
-      : base.enabledAgents;
+      : [];
+    const enabledAgents = validAgents.length
+      ? validAgents
+      : [...base.enabledAgents];
+    const needsDshEnabledMigration =
+      (!Array.isArray(parsed.agentOrder) ||
+        !parsed.agentOrder.includes("dsh")) &&
+      Array.isArray(parsed.enabledAgents) &&
+      !parsed.enabledAgents.includes("dsh");
+    if (needsDshEnabledMigration && !enabledAgents.includes("dsh")) {
+      const agIdx = enabledAgents.indexOf("antigravity");
+      const insertAt = agIdx >= 0 ? agIdx + 1 : Math.min(3, enabledAgents.length);
+      enabledAgents.splice(insertAt, 0, "dsh");
+    }
+    const projectOrder = Array.isArray(parsed.projectOrder)
+      ? Array.from(
+          new Set(
+            parsed.projectOrder.filter(
+              (id): id is string => typeof id === "string" && !!id,
+            ),
+          ),
+        )
+      : [];
     return {
       ...base,
       ...parsed,
       customHarnesses,
       agentOrder,
-      enabledAgents: validAgents.length
-        ? Array.from(new Set(validAgents))
-        : base.enabledAgents,
+      enabledAgents,
+      userReorderedAgents:
+        typeof parsed.userReorderedAgents === "boolean"
+          ? parsed.userReorderedAgents
+          : false,
+      projectOrder,
       customPaths:
         parsed.customPaths && typeof parsed.customPaths === "object"
           ? parsed.customPaths
@@ -194,6 +238,8 @@ interface SettingsStore extends PitaSettings {
   toggleAgent(id: AgentId): boolean;
   setEnabledAgents(ids: AgentId[]): void;
   reorderAgents(nextEnabledOrder: AgentId[]): void;
+  resetAgentOrder(): void;
+  reorderProjects(nextOrder: string[]): void;
   setCustomPath(id: AgentId, path: string): void;
   addCustomHarness(input: {
     name: string;
@@ -235,6 +281,8 @@ function extract(s: SettingsStore): PitaSettings {
   return {
     agentOrder: s.agentOrder,
     enabledAgents: s.enabledAgents,
+    userReorderedAgents: s.userReorderedAgents,
+    projectOrder: s.projectOrder,
     customPaths: s.customPaths,
     customHarnesses: s.customHarnesses,
     themeMode: s.themeMode,
@@ -284,7 +332,36 @@ export const useSettings = create<SettingsStore>((set, get) => ({
     const nextOrder = get().agentOrder.map((a) =>
       enabledSet.has(a) ? validNext[cursor++] : a,
     );
-    set({ enabledAgents: validNext, agentOrder: nextOrder });
+    set({
+      enabledAgents: validNext,
+      agentOrder: nextOrder,
+      userReorderedAgents: true,
+    });
+    persistSettings(extract(get()));
+  },
+  resetAgentOrder() {
+    const freshOrder: AgentId[] = [
+      ...ALL_AGENT_IDS,
+      ...get().customHarnesses.map((h) => h.id),
+    ];
+    const enabledSet = new Set(get().enabledAgents);
+    const nextEnabled = freshOrder.filter((id) => enabledSet.has(id));
+    set({
+      userReorderedAgents: false,
+      agentOrder: freshOrder,
+      enabledAgents: nextEnabled.length
+        ? nextEnabled
+        : [...DEFAULT_ENABLED_AGENTS],
+    });
+    persistSettings(extract(get()));
+  },
+  reorderProjects(nextOrder) {
+    const projectOrder = Array.from(
+      new Set(
+        nextOrder.filter((id): id is string => typeof id === "string" && !!id),
+      ),
+    );
+    set({ projectOrder });
     persistSettings(extract(get()));
   },
   setCustomPath(id, path) {

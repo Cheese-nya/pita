@@ -77,6 +77,10 @@ export interface PitaClient {
   readBackup(file?: File): Promise<RestorePlan>;
   requestDevice(): Promise<{ code: string; url: string; deviceCode?: string }>;
   exchangeDevice?(deviceCode: string): Promise<{ url: string; token: string }>;
+  connectGithubPat?(
+    token: string,
+    repo?: string,
+  ): Promise<{ url: string; token: string }>;
   resetDemo(): Promise<Workspace>;
   openPath(path: string): Promise<"opened" | "copied">;
   openUrl?(url: string): Promise<void>;
@@ -266,6 +270,20 @@ export class MockPitaClient implements PitaClient {
       url: "https://github.com/login/device",
     };
   }
+  async connectGithubPat(
+    token: string,
+    repo?: string,
+  ): Promise<{ url: string; token: string }> {
+    const trimmed = token.trim();
+    if (!trimmed) throw Error("githubAuthFailed");
+    const target = (repo ?? "").trim() || "pita-backup";
+    const url = target.startsWith("https://")
+      ? target
+      : target.includes("/")
+        ? `https://github.com/${target}`
+        : `https://github.com/pita-demo/${target}`;
+    return { url, token: trimmed };
+  }
   async resetDemo() {
     const fresh: Database = { workspace: await createSeed(), remotes: {} };
     const serialized = JSON.stringify(fresh);
@@ -317,7 +335,7 @@ export class MockPitaClient implements PitaClient {
     let earliest: string | null = null;
     const agents: AgentHookStatus[] = allIds.map((agentId) => {
       const support =
-        agentId === "claude-code"
+        agentId === "claude-code" || agentId === "dsh"
           ? "full"
           : agentId === "codex"
             ? "partial"
@@ -339,15 +357,19 @@ export class MockPitaClient implements PitaClient {
         caveatKey:
           agentId === "claude-code"
             ? "hookCaveatClaude"
-            : agentId === "codex"
-              ? "hookCaveatCodex"
-              : "hookCaveatUnsupported",
+            : agentId === "dsh"
+              ? "hookCaveatDsh"
+              : agentId === "codex"
+                ? "hookCaveatCodex"
+                : "hookCaveatUnsupported",
         configPath:
           agentId === "claude-code"
             ? "~/.claude/settings.json"
-            : agentId === "codex"
-              ? "~/.codex/config.toml"
-              : null,
+            : agentId === "dsh"
+              ? "~/.dsh/sessions/"
+              : agentId === "codex"
+                ? "~/.codex/hooks.json"
+                : null,
         trustGateRequired: agentId === "codex",
         callCount: 0,
       };
@@ -379,7 +401,7 @@ export class MockPitaClient implements PitaClient {
   }
 
   async enableUsageHook(agent: AgentId): Promise<UsageSummary> {
-    if (agent !== "claude-code" && agent !== "codex") {
+    if (agent !== "claude-code" && agent !== "codex" && agent !== "dsh") {
       throw Error("hookUnsupported");
     }
     const cur = this.readMockHooks();

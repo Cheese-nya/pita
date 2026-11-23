@@ -208,6 +208,16 @@ export class TauriPitaClient implements PitaClient {
     });
   }
 
+  async connectGithubPat(
+    token: string,
+    repo?: string,
+  ): Promise<{ url: string; token: string }> {
+    return invoke<{ url: string; token: string }>("auth_connect_github_pat", {
+      token,
+      repo,
+    });
+  }
+
   async resetDemo(): Promise<Workspace> {
     throw Error("missing");
   }

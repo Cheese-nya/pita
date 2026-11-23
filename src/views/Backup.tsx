@@ -28,49 +28,61 @@ export function Auth({
   close: () => void;
 }) {
   const { t } = useTranslation(),
+    native = isNativeRuntime(),
     [url, setUrl] = useState(""),
     [token, setToken] = useState(""),
+    [pat, setPat] = useState(""),
+    [repo, setRepo] = useState("pita-backup"),
+    [connectingPat, setConnectingPat] = useState(false),
+    [patErr, setPatErr] = useState(""),
     [device, setDevice] = useState<{
       code: string;
       url: string;
       deviceCode?: string;
     }>(),
     [deviceErr, setDeviceErr] = useState(""),
-    run = usePita((s) => s.run);
+    run = usePita((s) => s.run),
+    busy = usePita((s) => s.busy);
   useEffect(() => {
-    if (method === "github") {
+    if (method === "github" && !native) {
       setDeviceErr("");
       pitaClient
         .requestDevice()
         .then(setDevice)
         .catch((e) => setDeviceErr(errorKey(e)));
     }
-  }, [method]);
-  async function connect() {
-    if (method === "github" && isNativeRuntime()) {
-      if (!device?.deviceCode || !pitaClient.exchangeDevice) {
-        setDeviceErr("missingRemoteToken");
-        return;
-      }
-      try {
-        const exchanged = await pitaClient.exchangeDevice(device.deviceCode);
-        if (
-          await run(
-            {
-              type: "connect",
-              kind: "https",
-              url: exchanged.url,
-              token: exchanged.token,
-            },
-            "connected",
-          )
-        )
-          close();
-      } catch (e) {
-        setDeviceErr(errorKey(e));
-      }
+  }, [method, native]);
+  async function connectGithubPat() {
+    if (!pitaClient.connectGithubPat || !pat.trim() || connectingPat || busy) {
       return;
     }
+    setPatErr("");
+    setConnectingPat(true);
+    try {
+      const res = await pitaClient.connectGithubPat(
+        pat.trim(),
+        repo.trim() || undefined,
+      );
+      if (
+        await run(
+          {
+            type: "connect",
+            kind: "https",
+            url: res.url,
+            token: res.token,
+          },
+          "connected",
+        )
+      ) {
+        close();
+      }
+    } catch (e) {
+      setPatErr(errorKey(e));
+    } finally {
+      setConnectingPat(false);
+    }
+  }
+  async function connect() {
     if (
       await run(
         method === "github"
@@ -83,42 +95,106 @@ export function Auth({
   }
   return (
     <Modal title={t(method)} close={close}>
-      <div className="form">
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (method === "github" && native) {
+            void connectGithubPat();
+          } else {
+            void connect();
+          }
+        }}
+      >
         {method === "github" ? (
-          <>
-            <p>{t("deviceBody")}</p>
-            <small>{t("code")}</small>
-            <strong className="device-code">
-              {device
-                ? device.code.slice(0, 4) + "-" + device.code.slice(4)
-                : "…"}
-            </strong>
-            {device && (
+          native ? (
+            <>
+              <p>{t("githubPatIntro")}</p>
               <a
                 className="button"
-                href={device.url}
+                href="https://github.com/settings/tokens/new?scopes=repo&description=Pita+Backup"
                 target="_blank"
                 rel="noreferrer"
                 onClick={(e) => {
-                  if (isNativeRuntime() && pitaClient.openUrl) {
+                  if (pitaClient.openUrl) {
                     e.preventDefault();
-                    void pitaClient.openUrl(device.url);
+                    void pitaClient.openUrl(
+                      "https://github.com/settings/tokens/new?scopes=repo&description=Pita+Backup",
+                    );
                   }
                 }}
               >
-                {t("browser")}
+                {t("githubPatCreateLink")}
                 <ExternalLink size={14} />
               </a>
-            )}
-            <button className="primary" disabled={!device} onClick={connect}>
-              {t("approve")}
-            </button>
-            {deviceErr && (
-              <p className="warning" role="alert">
-                {t(deviceErr)}
-              </p>
-            )}
-          </>
+              <label>
+                {t("githubPatLabel")}
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={pat}
+                  onChange={(e) => {
+                    setPatErr("");
+                    setPat(e.target.value);
+                  }}
+                  placeholder={t("githubPatPlaceholder")}
+                />
+              </label>
+              <label>
+                {t("githubRepoLabel")}
+                <input
+                  type="text"
+                  value={repo}
+                  onChange={(e) => {
+                    setPatErr("");
+                    setRepo(e.target.value);
+                  }}
+                  placeholder="pita-backup"
+                />
+              </label>
+              <button
+                type="submit"
+                className="primary"
+                disabled={!pat.trim() || connectingPat || busy}
+              >
+                {t(connectingPat ? "working" : "connect")}
+              </button>
+              {patErr && (
+                <p className="warning" role="alert">
+                  {t(patErr)}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p>{t("deviceBody")}</p>
+              <small>{t("code")}</small>
+              <strong className="device-code">
+                {device
+                  ? device.code.slice(0, 4) + "-" + device.code.slice(4)
+                  : "…"}
+              </strong>
+              {device && (
+                <a
+                  className="button"
+                  href={device.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("browser")}
+                  <ExternalLink size={14} />
+                </a>
+              )}
+              <button type="submit" className="primary" disabled={!device}>
+                {t("approve")}
+              </button>
+              {deviceErr && (
+                <p className="warning" role="alert">
+                  {t(deviceErr)}
+                </p>
+              )}
+            </>
+          )
         ) : (
           <>
             <label>
@@ -131,26 +207,26 @@ export function Auth({
               />
             </label>
             <label>
-              {t("token")}
+              {t(native ? "tokenNative" : "token")}
               <input
                 type="password"
                 autoComplete="off"
-                placeholder={t("sampleToken")}
+                placeholder={t(native ? "tokenNativePlaceholder" : "sampleToken")}
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
               />
             </label>
-            <small>{t("tokenHelp")}</small>
+            <small>{t(native ? "tokenHelpNative" : "tokenHelp")}</small>
             <button
+              type="submit"
               className="primary"
               disabled={!gitUrl(url) || !token.trim()}
-              onClick={connect}
             >
               {t("connect")}
             </button>
           </>
         )}
-      </div>
+      </form>
     </Modal>
   );
 }

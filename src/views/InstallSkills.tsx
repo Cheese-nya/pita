@@ -361,6 +361,10 @@ export function InstallSkills({
   const [marketStatus, setMarketStatus] = useState<
     "loading" | "ready" | "error"
   >("loading");
+  const [sourceItems, setSourceItems] = useState<MarketplaceItem[]>([]);
+  const [sourceStatus, setSourceStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [marketRetry, retryMarket] = useState(0);
   const [marketPage, setMarketPage] = useState(0);
   const [shown, setShown] = useState(24);
@@ -472,6 +476,38 @@ export function InstallSkills({
   }, [tab, feed, marketPage, query, marketRetry]);
 
   useEffect(() => {
+    if (tab !== "market" || !sourceFilter || query) {
+      setSourceItems([]);
+      setSourceStatus("idle");
+      return;
+    }
+    const controller = new AbortController();
+    setSourceItems([]);
+    setSourceStatus("loading");
+    void (async () => {
+      try {
+        const result = await loadMarketplace(
+          feed,
+          0,
+          sourceFilter,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        const targetSource = sourceFilter.toLowerCase();
+        setSourceItems(
+          result.items.filter(
+            (item) => item.source.toLowerCase() === targetSource,
+          ),
+        );
+        setSourceStatus("ready");
+      } catch {
+        if (!controller.signal.aborted) setSourceStatus("error");
+      }
+    })();
+    return () => controller.abort();
+  }, [tab, feed, sourceFilter, query, marketRetry]);
+
+  useEffect(() => {
     if (!previewItem?.repoUrl) return;
     let active = true;
     setPreview(undefined);
@@ -494,9 +530,29 @@ export function InstallSkills({
   const visibleSources = showAllSources
     ? sources
     : [...new Set([...sources.slice(0, 5), sourceFilter].filter(Boolean))];
-  const marketItems = feedState.items.filter(
-    (item) => !sourceFilter || item.source === sourceFilter,
-  );
+  const marketItems = (() => {
+    if (!sourceFilter) return feedState.items;
+    const targetSource = sourceFilter.toLowerCase();
+    const fromFeed = feedState.items.filter(
+      (item) => item.source.toLowerCase() === targetSource,
+    );
+    if (query || !sourceItems.length) return fromFeed;
+    const byKey = new Map<string, MarketplaceItem>();
+    for (const item of fromFeed) byKey.set(item.key, item);
+    for (const item of sourceItems) byKey.set(item.key, item);
+    return [...byKey.values()].sort((a, b) => b.installs - a.installs);
+  })();
+  const effectiveMarketStatus =
+    marketStatus === "loading" ||
+    (!!sourceFilter && !query && sourceStatus === "loading")
+      ? "loading"
+      : marketStatus === "error" ||
+          (!!sourceFilter &&
+            !query &&
+            sourceStatus === "error" &&
+            !marketItems.length)
+        ? "error"
+        : "ready";
 
   function openMarket(item: MarketplaceItem) {
     setMarketInstallError("");
@@ -710,7 +766,10 @@ export function InstallSkills({
               type="button"
               className={"source-chip" + (!sourceFilter ? " active" : "")}
               aria-pressed={!sourceFilter}
-              onClick={() => setSourceFilter("")}
+              onClick={() => {
+                setSourceFilter("");
+                setShown(24);
+              }}
             >
               {t("allSources")}
             </button>
@@ -722,9 +781,10 @@ export function InstallSkills({
                   "source-chip" + (sourceFilter === src ? " active" : "")
                 }
                 aria-pressed={sourceFilter === src}
-                onClick={() =>
-                  setSourceFilter((prev) => (prev === src ? "" : src))
-                }
+                onClick={() => {
+                  setSourceFilter((prev) => (prev === src ? "" : src));
+                  setShown(24);
+                }}
               >
                 {src}
               </button>
@@ -839,9 +899,9 @@ export function InstallSkills({
           )}
           {query.length === 1 ? (
             <p role="status">{t("marketMinQuery")}</p>
-          ) : marketStatus === "loading" ? (
+          ) : effectiveMarketStatus === "loading" ? (
             <p role="status">{t("marketLoading")}</p>
-          ) : marketStatus === "error" ? (
+          ) : effectiveMarketStatus === "error" ? (
             <div className="empty panel" role="status">
               <SearchX />
               <b>{t("marketUnavailable")}</b>
@@ -875,7 +935,7 @@ export function InstallSkills({
             </span>
             {(shown < marketItems.length ||
               (feedState.hasMore && !sourceFilter)) &&
-              marketStatus === "ready" && (
+              effectiveMarketStatus === "ready" && (
                 <button
                   type="button"
                   onClick={() => {

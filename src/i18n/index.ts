@@ -90,6 +90,7 @@ const messages: Record<string, [string, string]> = {
   "claude-code": ["Claude Code", "Claude Code"],
   codex: ["Codex", "Codex"],
   antigravity: ["Antigravity", "Antigravity"],
+  dsh: ["DSH", "DSH"],
   qoder: ["Qoder", "Qoder"],
   workbuddy: ["WorkBuddy", "WorkBuddy"],
   "t3-code": ["T3 Code", "T3 Code"],
@@ -948,8 +949,16 @@ const messages: Record<string, [string, string]> = {
     "Writes PreToolUse (Skill) + UserPromptSubmit (/skillname) to ~/.claude/settings.json; cleanly removed on disable.",
   ],
   hookCaveatCodex: [
-    "写入 ~/.codex/config.toml（仅能捕获显式 $skill-name 调用，模型隐式触发不可见；开启后需在 Codex 中确认信任该钩子）。",
-    "Writes to ~/.codex/config.toml (explicit $skill-name calls only; implicit triggers are invisible; trust the hook in Codex to activate).",
+    "写入 ~/.codex/hooks.json 的 UserPromptSubmit 钩子（捕获显式 $skill-name / /skill-name 调用；开启后需在 Codex 钩子设置中确认信任）。",
+    "Writes UserPromptSubmit hook to ~/.codex/hooks.json (tracks explicit $skill-name / /skill-name calls; approve in Codex hooks settings).",
+  ],
+  hookCaveatDsh: [
+    "只读增量解析 ~/.dsh/sessions/ 会话日志（统计 skill 工具与 /skill 调用，不改写任何 DSH 配置文件）。",
+    "Read-only incremental scan of ~/.dsh/sessions/ logs (tracks skill tool & /skill calls without modifying DSH config).",
+  ],
+  hookBinaryMissing: [
+    "未找到 pita-hook 可执行文件，请重新构建或重新安装应用后再开启统计。",
+    "pita-hook binary not found. Rebuild or reinstall Pita before enabling usage tracking.",
   ],
   hookCaveatUnsupported: [
     "该 Agent 暂未验证可靠调用钩子，当前仅提供路线三账本与上下文占用数据。",
@@ -1016,6 +1025,63 @@ const messages: Record<string, [string, string]> = {
   customHarnessBadge: ["自定义", "Custom"],
   customHarnessRemove: ["移除自定义 Harness", "Remove custom harness"],
   customHarnessAdded: ["已添加自定义 Harness", "Custom harness added"],
+  dshCompatWarn: ["DSH 兼容提示", "DSH compatibility warning"],
+  dshWarnInvalidName: [
+    "名称须为小写连字符 kebab-case（仅 a-z、0-9、-），否则 DSH 会忽略此 Skill。",
+    "Name must be lowercase kebab-case (a-z, 0-9, -) or DSH will ignore this skill.",
+  ],
+  dshWarnLegacyKey: [
+    "Frontmatter 含旧驼峰字段（{{detail}}），DSH 仅接受 disable-model-invocation / user-invocable。",
+    "Frontmatter uses legacy camelCase key ({{detail}}); DSH requires disable-model-invocation / user-invocable.",
+  ],
+  dshWarnLongDesc: [
+    "描述超过 500 字符，DSH 会话目录会自动截断。",
+    "Description exceeds 500 chars and will be truncated in DSH catalog.",
+  ],
+  dshAgentsFallbackHint: [
+    "提示：同一作用域下 Codex 已启用此 Skill（.agents/skills），DSH 仍会回落加载该副本。",
+    "Note: Codex still enables this skill in .agents/skills, which DSH loads as a fallback.",
+  ],
+  githubPatIntro: [
+    "使用 GitHub Personal Access Token (PAT) 连接私有备份仓库（不存在时自动创建私有仓库）。",
+    "Connect with a GitHub Personal Access Token (auto-creates a private backup repo if missing).",
+  ],
+  githubPatLabel: ["GitHub 访问令牌 (PAT)", "GitHub Personal Access Token"],
+  githubPatPlaceholder: ["ghp_... 或 github_pat_...", "ghp_... or github_pat_..."],
+  githubPatCreateLink: [
+    "前往 GitHub 生成 Token（需 repo 权限）",
+    "Create token on GitHub (repo scope)",
+  ],
+  githubRepoLabel: [
+    "备份仓库名或完整地址（默认 pita-backup）",
+    "Backup repository name or URL (default: pita-backup)",
+  ],
+  githubAuthFailed: [
+    "GitHub 令牌验证失败，请检查 Token 是否有效且具备 repo 权限。",
+    "GitHub token verification failed. Check that your token is valid with repo scope.",
+  ],
+  githubOAuthNotConfigured: [
+    "当前版本未内置 GitHub OAuth Client ID，请使用个人访问令牌 (PAT) 连接。",
+    "GitHub OAuth Client ID is not bundled in this build. Connect with a Personal Access Token instead.",
+  ],
+  gitPushFailed: [
+    "推送到远端仓库失败，请检查网络、代理、仓库地址与 Token 权限。",
+    "Failed to push to remote repository. Check network, proxy, URL, and token permissions.",
+  ],
+  tokenNative: ["访问令牌 (PAT)", "Personal Access Token"],
+  tokenNativePlaceholder: ["ghp_... / glpat-...", "ghp_... / glpat-..."],
+  tokenHelpNative: [
+    "令牌将加密保存在系统钥匙串中，仅用于向您的 Git 仓库推送与拉取备份。",
+    "Stored securely in your OS keychain and used only to push/pull workspace backups.",
+  ],
+  pathMissing: [
+    "目录尚不存在（该 Agent 可能未安装）。",
+    "Directory does not exist yet (agent may not be installed).",
+  ],
+  sortByInstalled: ["按已安装排序", "Sort installed first"],
+  dragToReorder: ["拖拽排序", "Drag to reorder"],
+  removeProjectQuick: ["移除工作区", "Remove workspace"],
+  translatingProgress: ["翻译中 {{done}}/{{total}}…", "Translating {{done}}/{{total}}…"],
 };
 export function preference(k: string, fallback: string) {
   try {

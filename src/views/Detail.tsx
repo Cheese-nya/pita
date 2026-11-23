@@ -19,6 +19,7 @@ import {
   Pencil,
   RotateCcw,
   Activity,
+  TriangleAlert,
 } from "lucide-react";
 import {
   AgentIcon,
@@ -33,15 +34,19 @@ import {
 } from "../components/ui";
 import { Snapshots } from "./Management";
 import { PresetEditor } from "./Presets";
-import { usePita, useWorkspace } from "../store";
+import { errorKey, usePita, useWorkspace } from "../store";
 import {
   agentEnabledTokens,
   agentNativeConfigKey,
+  checkDshCompatibility,
   copies,
   estimateTokens,
   stagedDisable,
   globalTarget,
+  hasDshAgentsFallbackConflict,
   location,
+  orderAgentsByPresence,
+  orderProjects,
   presetLabel,
   sameScope,
   scopeKey,
@@ -50,10 +55,14 @@ import {
   type Skill,
   available,
 } from "../types/workspace";
-import { useSettings } from "../services/settings";
+import { isCustomAgentId, useSettings } from "../services/settings";
 import type { AgentId, ScopeTarget } from "../types/domain";
 import { gitUrl, unpack } from "../services/tree";
-import { pitaClient, type UsageSummary } from "../services/pitaClient";
+import {
+  isNativeRuntime,
+  pitaClient,
+  type UsageSummary,
+} from "../services/pitaClient";
 import {
   resolveSkillDescription,
   translateDescriptionAsync,
@@ -78,6 +87,9 @@ export function Detail({
     run = usePita((v) => v.run),
     notify = usePita((v) => v.notify),
     enabledAgents = useSettings((v) => v.enabledAgents),
+    userReorderedAgents = useSettings((v) => v.userReorderedAgents),
+    projectOrder = useSettings((v) => v.projectOrder),
+    customPaths = useSettings((v) => v.customPaths),
     translationEngine = useSettings((v) => v.translationEngine),
     descInfo = resolveSkillDescription(s, true),
     [tab, setTab] = useState(initial),
@@ -161,6 +173,58 @@ export function Detail({
   const prevId = index > 0 ? navIds[index - 1] : undefined;
   const nextId =
     index >= 0 && index < navIds.length - 1 ? navIds[index + 1] : undefined;
+
+  const showDshCompat =
+    (target?.kind === "global-agent" && target.agentId === "dsh") ||
+    (target?.kind === "project" && scopeAgents(w, target).includes("dsh")) ||
+    s.deployments.some((d) => d.agentId === "dsh");
+  const dshWarnings = showDshCompat ? checkDshCompatibility(s) : [];
+
+  const orderedGlobalAgentIds = orderAgentsByPresence(
+    Array.from(
+      new Set([
+        ...enabledAgents,
+        ...s.deployments
+          .filter((d) => d.scope.kind === "global-agent")
+          .map((d) => d.agentId),
+      ]),
+    ),
+    installedAgents,
+    userReorderedAgents,
+  );
+  const orderedProjectIds = new Map(
+    orderProjects(w.projects, projectOrder).map((p, idx) => [p.id, idx]),
+  );
+  const orderedProjectAgentIdx = new Map(
+    orderAgentsByPresence(
+      Array.from(
+        new Set(
+          s.deployments
+            .filter((d) => d.scope.kind === "project")
+            .map((d) => d.agentId),
+        ),
+      ),
+      installedAgents,
+      userReorderedAgents,
+    ).map((a, idx) => [a, idx]),
+  );
+  const orderedProjectDeployments = [
+    ...s.deployments.filter((d) => d.scope.kind === "project"),
+  ].sort((a, b) => {
+    const pa =
+      a.scope.kind === "project"
+        ? (orderedProjectIds.get(a.scope.projectId) ?? 9999)
+        : 9999;
+    const pb =
+      b.scope.kind === "project"
+        ? (orderedProjectIds.get(b.scope.projectId) ?? 9999)
+        : 9999;
+    if (pa !== pb) return pa - pb;
+    return (
+      (orderedProjectAgentIdx.get(a.agentId) ?? 9999) -
+      (orderedProjectAgentIdx.get(b.agentId) ?? 9999)
+    );
+  });
 
   useEffect(() => {
     if (!onNavigate || del || removeTarget) return;
@@ -316,6 +380,29 @@ export function Detail({
         <div className="drawer-body">
           {tab === "overview" && (
             <>
+              {dshWarnings.length > 0 && (
+                <div className="notice" role="status">
+                  <TriangleAlert
+                    size={15}
+                    aria-hidden="true"
+                    style={{ flexShrink: 0 }}
+                  />
+                  <div>
+                    <strong>{t("dshCompatWarn")}</strong>
+                    {dshWarnings.map((warn) => (
+                      <div key={warn.code}>
+                        {warn.code === "invalidName"
+                          ? t("dshWarnInvalidName")
+                          : warn.code === "legacyInvocationKey"
+                            ? t("dshWarnLegacyKey", {
+                                detail: warn.detail ?? "",
+                              })
+                            : t("dshWarnLongDesc")}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {s.source.type !== "git" && (
                 <form
                   className="section form"
@@ -496,25 +583,23 @@ export function Detail({
                   {t("scopes")}
                 </h3>
                 {[
-                  ...Array.from(
-                    new Set([
-                      ...enabledAgents,
-                      ...s.deployments
-                        .filter((d) => d.scope.kind === "global-agent")
-                        .map((d) => d.agentId),
-                    ]),
-                  ).map((a) => ({
+                  ...orderedGlobalAgentIds.map((a) => ({
                     scope: globalTarget(a),
                     agentId: a,
                   })),
-                  ...s.deployments.filter((d) => d.scope.kind === "project"),
+                  ...orderedProjectDeployments,
                 ].map(({ scope, agentId }) => {
                   const allowed = scopeAgents(w, scope).includes(agentId);
                   const d = s.deployments.find(
                     (d) => sameScope(d.scope, scope) && d.agentId === agentId,
                   );
-                  const unavailable =
-                    !d && installedAgents && !installedAgents.includes(agentId);
+                  const isBuiltinUninstalled =
+                    scope.kind === "global-agent" &&
+                    !isCustomAgentId(agentId) &&
+                    !customPaths[agentId]?.trim() &&
+                    isNativeRuntime() &&
+                    (!installedAgents || !installedAgents.includes(agentId));
+                  const unavailable = !d && isBuiltinUninstalled;
                   return (
                     <div className="deployment" key={scopeKey(scope) + agentId}>
                       <div className="line">
@@ -543,13 +628,24 @@ export function Detail({
                           aria-label={`${t("openFolder")} · ${location(w, scope, agentId)}`}
                           onClick={async () => {
                             const loc = location(w, scope, agentId);
-                            const mode = await pitaClient.openPath(loc);
-                            notify({
-                              key:
-                                mode === "opened" ? "pathOpened" : "pathCopied",
-                              detail: loc,
-                              undo: false,
-                            });
+                            try {
+                              const mode = await pitaClient.openPath(loc);
+                              notify({
+                                key:
+                                  mode === "opened"
+                                    ? "pathOpened"
+                                    : "pathCopied",
+                                detail: loc,
+                                undo: false,
+                              });
+                            } catch (e) {
+                              notify({
+                                key: errorKey(e),
+                                detail: loc,
+                                error: true,
+                                undo: false,
+                              });
+                            }
                           }}
                         >
                           <FolderOpen size={13} aria-hidden="true" />
@@ -567,6 +663,13 @@ export function Detail({
                           d?.gitTrackedInProject) && (
                           <small className="warning">
                             {t("projectWarning")}
+                          </small>
+                        )}
+                      {agentId === "dsh" &&
+                        d &&
+                        hasDshAgentsFallbackConflict(s, d.scope) && (
+                          <small className="warning">
+                            {t("dshAgentsFallbackHint")}
                           </small>
                         )}
                       {!unavailable && (
@@ -769,6 +872,13 @@ function Ledger({ s }: { s: Skill }) {
   const { t, i18n } = useTranslation(),
     w = useWorkspace(),
     enabledAgents = useSettings((v) => v.enabledAgents),
+    userReorderedAgents = useSettings((v) => v.userReorderedAgents),
+    installedAgents = usePita((v) => v.installedAgents),
+    orderedLedgerAgents = orderAgentsByPresence(
+      enabledAgents,
+      installedAgents,
+      userReorderedAgents,
+    ),
     tokens = skillTokens(s);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   useEffect(() => {
@@ -820,7 +930,7 @@ function Ledger({ s }: { s: Skill }) {
           )}
         </dl>
         <small>{t("tokenEstimateMethod")}</small>
-        {enabledAgents.map((a) => {
+        {orderedLedgerAgents.map((a) => {
           const active = copies(s, globalTarget(a)).some(
             (d) => d.agentId === a && d.status === "enabled",
           );

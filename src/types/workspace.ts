@@ -8,10 +8,11 @@ import type {
   PresetBinding,
   ScopeTarget,
 } from "./domain";
+import { parse } from "yaml";
 import { ALL_AGENT_IDS, getSettings } from "../services/settings";
 import { Tiktoken } from "js-tiktoken/lite";
 import tokenRanks from "js-tiktoken/ranks/cl100k_base";
-import { meta } from "../services/tree";
+import { meta, unpack } from "../services/tree";
 export const agents: BuiltinAgentId[] = ALL_AGENT_IDS;
 export function allAgents(): AgentId[] {
   return [
@@ -41,6 +42,11 @@ export const AGENT_META: Record<BuiltinAgentId, AgentMeta> = {
   antigravity: {
     paths: ["~/.gemini/config/skills", "~/.gemini/antigravity/skills"],
     projectDir: ".agent",
+    nativeDisable: false,
+  },
+  dsh: {
+    paths: ["~/.dsh/skills"],
+    projectDir: ".dsh",
     nativeDisable: false,
   },
   trae: {
@@ -393,4 +399,164 @@ export function location(w: Workspace, t: ScopeTarget, a?: AgentId) {
   const root =
     w.projects.find((p) => p.id === t.projectId)?.path ?? t.projectId;
   return a ? root + "/" + getAgentMeta(a).projectDir + "/skills" : root;
+}
+
+export function orderAgentsByPresence<T extends AgentId>(
+  ids: readonly T[],
+  installedAgents?: readonly AgentId[],
+  userReordered?: boolean,
+): T[] {
+  if (userReordered || !installedAgents) return [...ids];
+  const installedSet = new Set<AgentId>(installedAgents);
+  const installed: T[] = [];
+  const uninstalled: T[] = [];
+  for (const id of ids) {
+    if (installedSet.has(id)) installed.push(id);
+    else uninstalled.push(id);
+  }
+  return [...installed, ...uninstalled];
+}
+
+export function orderProjects<T extends { id: string }>(
+  projects: readonly T[],
+  projectOrder: readonly string[],
+): T[] {
+  if (!projectOrder.length) return [...projects];
+  const indexMap = new Map<string, number>();
+  projectOrder.forEach((id, i) => {
+    if (!indexMap.has(id)) indexMap.set(id, i);
+  });
+  return projects
+    .map((project, origIndex) => ({
+      project,
+      orderIdx: indexMap.get(project.id),
+      origIndex,
+    }))
+    .sort((a, b) => {
+      if (a.orderIdx !== undefined && b.orderIdx !== undefined) {
+        return a.orderIdx - b.orderIdx;
+      }
+      if (a.orderIdx !== undefined) return -1;
+      if (b.orderIdx !== undefined) return 1;
+      return a.origIndex - b.origIndex;
+    })
+    .map((item) => item.project);
+}
+
+export interface DshCompatWarning {
+  code: "invalidName" | "legacyInvocationKey" | "longDescription";
+  detail?: string;
+}
+
+function parseSkillFrontmatter(
+  files: Files | undefined,
+): { rawFrontmatter: string; data: Record<string, unknown> | null } | null {
+  if (!files || !Object.hasOwn(files, "SKILL.md")) return null;
+  try {
+    const raw = unpack(files["SKILL.md"])
+      .replace(/^\uFEFF/, "")
+      .replace(/\r\n/g, "\n");
+    const front = raw.match(/^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
+    if (!front) return null;
+    let data: Record<string, unknown> | null = null;
+    try {
+      const parsed = parse(front[1]);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        data = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* ignore yaml parse failure; callers can fall back to rawFrontmatter */
+    }
+    return { rawFrontmatter: front[1], data };
+  } catch {
+    return null;
+  }
+}
+
+const DSH_KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DSH_LEGACY_KEYS = [
+  "disableModelInvocation",
+  "modelInvocable",
+  "userInvocable",
+] as const;
+
+export function checkDshCompatibility(
+  skill: Pick<Skill, "name" | "description" | "files">,
+): DshCompatWarning[] {
+  const warnings: DshCompatWarning[] = [];
+  const fm = parseSkillFrontmatter(skill.files);
+  const fmName =
+    fm?.data && typeof fm.data.name === "string" && fm.data.name.trim()
+      ? fm.data.name.trim()
+      : undefined;
+  const effectiveName = fmName ?? skill.name.trim();
+  if (!DSH_KEBAB_RE.test(effectiveName) || !DSH_KEBAB_RE.test(skill.name.trim())) {
+    warnings.push({ code: "invalidName" });
+  }
+  if (fm) {
+    const matchedKeys: string[] = [];
+    for (const key of DSH_LEGACY_KEYS) {
+      if (
+        (fm.data && Object.hasOwn(fm.data, key)) ||
+        new RegExp(`^${key}\\s*:`, "m").test(fm.rawFrontmatter)
+      ) {
+        matchedKeys.push(key);
+      }
+    }
+    if (matchedKeys.length) {
+      warnings.push({
+        code: "legacyInvocationKey",
+        detail: matchedKeys.join(", "),
+      });
+    }
+  }
+  if (skill.description.trim().length > 500) {
+    warnings.push({ code: "longDescription" });
+  }
+  return warnings;
+}
+
+export function hasDshAgentsFallbackConflict(
+  skill: Skill,
+  scope: ScopeTarget,
+): boolean {
+  const dshDeployment = copies(skill, scope).find((d) => d.agentId === "dsh");
+  if (!dshDeployment || dshDeployment.status === "enabled") return false;
+  const codexScope =
+    scope.kind === "project" ? scope : globalTarget("codex");
+  return copies(skill, codexScope).some(
+    (d) => d.agentId === "codex" && d.status === "enabled",
+  );
+}
+
+function parseGitHubRepoUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const m = trimmed.match(
+    /^(?:git\+)?(?:https?:\/\/(?:www\.)?|git@)?github\.com[:/]([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#].*)?$/i,
+  );
+  if (!m) return undefined;
+  const owner = m[1];
+  const repo = m[2].replace(/\.git$/i, "");
+  if (!repo || repo === "." || repo === "..") return undefined;
+  return `https://github.com/${owner}/${repo}`;
+}
+
+export function extractFrontmatterGitHubUrl(
+  skill: Pick<Skill, "files">,
+): string | undefined {
+  const fm = parseSkillFrontmatter(skill.files);
+  if (!fm?.data) return undefined;
+  const fields = ["repository", "repo", "source", "upstream", "homepage"] as const;
+  for (const field of fields) {
+    const val = fm.data[field];
+    const direct = parseGitHubRepoUrl(val);
+    if (direct) return direct;
+    if (val && typeof val === "object" && !Array.isArray(val) && "url" in val) {
+      const nested = parseGitHubRepoUrl((val as { url?: unknown }).url);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
 }

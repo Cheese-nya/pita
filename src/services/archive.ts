@@ -44,6 +44,7 @@ const builtinAgent = z.enum([
   "claude-code",
   "codex",
   "antigravity",
+  "dsh",
   "qoder",
   "workbuddy",
   "t3-code",
@@ -351,6 +352,7 @@ export function detectProjects(
     if (dot === ".claude") agent = "claude-code";
     else if (dot === ".codex" || dot === ".agents") agent = "codex";
     else if (dot === ".agent") agent = "antigravity";
+    else if (dot === ".dsh") agent = "dsh";
     else if (dot === ".qoder") agent = "qoder";
     else if (dot === ".workbuddy") agent = "workbuddy";
     else if (dot === ".t3code") agent = "t3-code";

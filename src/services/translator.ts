@@ -169,12 +169,15 @@ export async function translateDescriptionAsync(
   const { translationEngine, customApiUrl, customApiModel, customApiKey } =
     getSettings();
   if (translationEngine === "builtin") {
+    if (fallback) {
+      return { text: fallback, usedFallback: false };
+    }
     try {
       return { text: await translateWithGoogle(trimmed), usedFallback: false };
     } catch (err) {
       return {
-        text: fallback,
-        usedFallback: !!fallback,
+        text: "",
+        usedFallback: false,
         error: err instanceof Error ? err.message : String(err),
       };
     }
@@ -340,6 +343,14 @@ export function needsTranslation(item: {
   );
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export interface TranslateProgress {
+  done: number;
+  total: number;
+  newlyTranslated: { id: string; description: string; text: string }[];
+}
+
 export async function translateMissing<
   T extends {
     id: string;
@@ -347,24 +358,45 @@ export async function translateMissing<
     description: string;
     descriptionZh?: string;
   },
->(items: T[]) {
+>(items: T[], onProgress?: (info: TranslateProgress) => void) {
   const translated: { id: string; description: string; text: string }[] = [];
   const pending = items.filter(needsTranslation);
-  for (let i = 0; i < pending.length; i += 4) {
+  const total = pending.length;
+  let done = 0;
+  for (let i = 0; i < pending.length; i += 2) {
+    const batch = pending.slice(i, i + 2);
     await Promise.all(
-      pending.slice(i, i + 4).map(async (item) => {
-        const result = await translateDescriptionAsync(
+      batch.map(async (item) => {
+        let result = await translateDescriptionAsync(
           item.name,
           item.description,
         );
-        if (result.text)
-          translated.push({
-            id: item.id,
-            description: item.description,
-            text: result.text,
-          });
+        if (!result.text && result.error !== "Missing URL or API Key") {
+          await sleep(400);
+          result = await translateDescriptionAsync(
+            item.name,
+            item.description,
+          );
+        }
+        done += 1;
+        const entry = result.text
+          ? {
+              id: item.id,
+              description: item.description,
+              text: result.text,
+            }
+          : null;
+        if (entry) translated.push(entry);
+        onProgress?.({
+          done,
+          total,
+          newlyTranslated: entry ? [entry] : [],
+        });
       }),
     );
+    if (i + 2 < pending.length) {
+      await sleep(120);
+    }
   }
   return { translated, failed: pending.length - translated.length };
 }

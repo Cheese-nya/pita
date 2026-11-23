@@ -25,6 +25,50 @@ const feeds = { all: "all-time", trending: "trending", popular: "hot" };
 const cache = new Map<string, { at: number; result: MarketplacePage }>();
 const githubRepo = /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/i;
 
+const WELL_KNOWN_MARKETPLACE_REPOS: Record<string, string> = {
+  "agent-browser": "https://github.com/vercel-labs/agent-browser",
+  "find-skills": "https://github.com/vercel-labs/skills",
+  "vercel-react-best-practices": "https://github.com/vercel-labs/agent-skills",
+  "web-design-guidelines": "https://github.com/vercel-labs/agent-skills",
+  "vercel-composition-patterns": "https://github.com/vercel-labs/agent-skills",
+  "frontend-design": "https://github.com/anthropics/skills",
+  pdf: "https://github.com/anthropics/skills",
+  docx: "https://github.com/anthropics/skills",
+  pptx: "https://github.com/anthropics/skills",
+  xlsx: "https://github.com/anthropics/skills",
+  "skill-creator": "https://github.com/anthropics/skills",
+  "mcp-builder": "https://github.com/anthropics/skills",
+  "webapp-testing": "https://github.com/anthropics/skills",
+  "playwright-cli": "https://github.com/microsoft/playwright-cli",
+  hyperframes: "https://github.com/heygen-com/hyperframes",
+  "hyperframes-cli": "https://github.com/heygen-com/hyperframes",
+  "hyperframes-registry": "https://github.com/heygen-com/hyperframes",
+  "remotion-best-practices": "https://github.com/remotion-dev/skills",
+};
+
+const skillRepoMap = new Map<string, { repoUrl: string; installs: number }>();
+
+function recordMarketplaceRepo(
+  skillKey: string,
+  repoUrl: string,
+  installs: number,
+) {
+  const normalized = skillKey.trim().toLowerCase();
+  if (!normalized) return;
+  const existing = skillRepoMap.get(normalized);
+  if (!existing || installs > existing.installs) {
+    skillRepoMap.set(normalized, { repoUrl, installs });
+  }
+}
+
+export function knownMarketplaceRepoForSkill(
+  skillId: string,
+): string | undefined {
+  const key = skillId.trim().toLowerCase();
+  if (!key) return undefined;
+  return skillRepoMap.get(key)?.repoUrl ?? WELL_KNOWN_MARKETPLACE_REPOS[key];
+}
+
 export async function loadMarketplace(
   feed: MarketplaceFeed,
   page: number,
@@ -71,6 +115,10 @@ export async function loadMarketplace(
         ? `https://github.com/${source}`
         : undefined;
     const url = `https://skills.sh/${source.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(slug)}`;
+    if (repoUrl) {
+      recordMarketplaceRepo(slug, repoUrl, row.installs);
+      recordMarketplaceRepo(row.name, repoUrl, row.installs);
+    }
     items.set(id, {
       key: id,
       slug,

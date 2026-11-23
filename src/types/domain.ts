@@ -2,6 +2,7 @@ export type BuiltinAgentId =
   | "claude-code"
   | "codex"
   | "antigravity"
+  | "dsh"
   | "qoder"
   | "workbuddy"
   | "t3-code"

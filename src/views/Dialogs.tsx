@@ -22,7 +22,7 @@ import {
 import { AgentIcon, TabBar, Modal } from "../components/ui";
 import { Picker } from "../components/FilePicker";
 import { TranslateSkillsButton } from "../components/TranslateSkillsButton";
-import { usePita, useWorkspace } from "../store";
+import { errorKey, usePita, useWorkspace } from "../store";
 import {
   isNativeRuntime,
   pitaClient,
@@ -31,7 +31,11 @@ import {
 } from "../services/pitaClient";
 import type { AgentId, CustomAgentId } from "../types/domain";
 import type { DetectedProject } from "../services/archive";
-import { getAgentMeta, globalTarget } from "../types/workspace";
+import {
+  getAgentMeta,
+  globalTarget,
+  orderAgentsByPresence,
+} from "../types/workspace";
 import {
   CUSTOM_HARNESS_COLORS,
   isCustomAgentId,
@@ -246,6 +250,23 @@ export function Settings({ close }: { close: () => void }) {
     { id: "workspace", label: t("settingsWorkspace"), icon: HardDrive },
   ];
 
+  const orderedAgentIds = orderAgentsByPresence(
+    settings.agentOrder,
+    installedAgents,
+    settings.userReorderedAgents,
+  );
+  const usageByAgent = new Map(
+    (usage?.agents ?? []).map((item) => [item.agentId, item] as const),
+  );
+  const orderedUsageAgents = [
+    ...orderedAgentIds
+      .map((id) => usageByAgent.get(id))
+      .filter((item): item is NonNullable<typeof item> => !!item),
+    ...(usage?.agents ?? []).filter(
+      (item) => !orderedAgentIds.includes(item.agentId),
+    ),
+  ];
+
   return (
     <Modal title={t("settings")} close={close} wide>
       <div className="settings-shell">
@@ -277,14 +298,26 @@ export function Settings({ close }: { close: () => void }) {
             <div className="settings-group">
               <div className="line">
                 <p className="settings-help">{t("settingsAgentsHelp")}</p>
-                <button
-                  type="button"
-                  className="ml-auto nowrap-btn"
-                  onClick={() => setShowAddHarness((v) => !v)}
-                >
-                  <Plus size={14} aria-hidden="true" />
-                  {t("customHarnessTitle")}
-                </button>
+                <div className="line ml-auto">
+                  {settings.userReorderedAgents && (
+                    <button
+                      type="button"
+                      className="nowrap-btn"
+                      onClick={() => settings.resetAgentOrder()}
+                    >
+                      <RotateCcw size={13} aria-hidden="true" />
+                      {t("sortByInstalled")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="nowrap-btn"
+                    onClick={() => setShowAddHarness((v) => !v)}
+                  >
+                    <Plus size={14} aria-hidden="true" />
+                    {t("customHarnessTitle")}
+                  </button>
+                </div>
               </div>
 
               {showAddHarness && (
@@ -486,7 +519,7 @@ export function Settings({ close }: { close: () => void }) {
               />
 
               <div className="settings-agent-list">
-                {settings.agentOrder.map((id) => {
+                {orderedAgentIds.map((id) => {
                   const enabled = settings.enabledAgents.includes(id);
                   const isLast =
                     enabled && settings.enabledAgents.length <= 1;
@@ -905,7 +938,7 @@ export function Settings({ close }: { close: () => void }) {
               )}
 
               <div className="settings-agent-list">
-                {(usage?.agents ?? []).map((item) => {
+                {orderedUsageAgents.map((item) => {
                   const isSupported = item.support !== "unsupported";
                   const isPendingDisable = confirmDisableAgent === item.agentId;
                   return (
@@ -967,6 +1000,13 @@ export function Settings({ close }: { close: () => void }) {
                                     detail: t(item.agentId),
                                     undo: false,
                                   });
+                                } catch (e) {
+                                  notify({
+                                    key: errorKey(e),
+                                    detail: t(item.agentId),
+                                    error: true,
+                                    undo: false,
+                                  });
                                 } finally {
                                   setHookBusy(null);
                                 }
@@ -1006,6 +1046,13 @@ export function Settings({ close }: { close: () => void }) {
                                         detail: t(item.agentId),
                                         undo: false,
                                       });
+                                    } catch (e) {
+                                      notify({
+                                        key: errorKey(e),
+                                        detail: t(item.agentId),
+                                        error: true,
+                                        undo: false,
+                                      });
                                     } finally {
                                       setHookBusy(null);
                                     }
@@ -1030,6 +1077,13 @@ export function Settings({ close }: { close: () => void }) {
                                       notify({
                                         key: "usageHookDisabled",
                                         detail: t(item.agentId),
+                                        undo: false,
+                                      });
+                                    } catch (e) {
+                                      notify({
+                                        key: errorKey(e),
+                                        detail: t(item.agentId),
+                                        error: true,
                                         undo: false,
                                       });
                                     } finally {

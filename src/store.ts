@@ -131,21 +131,49 @@ export const usePita = create<Store>((set, get) => ({
   },
   notify: (receipt) => set({ receipt }),
 }));
-export const errorKey = (e: unknown) =>
-  e instanceof Error &&
-  [
-    "workspaceChanged",
-    "invalidUrl",
-    "invalidSkill",
-    "invalidBundle",
-    "duplicate",
-    "chooseProjectAgents",
-    "chooseSkill",
-    "presetNameTaken",
-    "noBackup",
-    "storageFull",
-    "missing",
-  ].includes(e.message)
-    ? e.message
-    : "error";
+const KNOWN_ERROR_KEYS = new Set([
+  "workspaceChanged",
+  "invalidUrl",
+  "invalidSkill",
+  "invalidBundle",
+  "duplicate",
+  "chooseProjectAgents",
+  "chooseSkill",
+  "chooseSkillOrDelete",
+  "presetNameTaken",
+  "noBackup",
+  "storageFull",
+  "missing",
+  "missingRemoteToken",
+  "invalidAgentConfig",
+  "agentNotInstalled",
+  "hookBinaryMissing",
+  "githubOAuthNotConfigured",
+  "githubAuthFailed",
+  "gitPushFailed",
+  "translationUnavailable",
+  "pathMissing",
+  "marketUnavailable",
+  "marketRepoUnavailable",
+  "marketSkillMissing",
+  "marketExternalSource",
+  "hookUnsupported",
+  "contentConflict",
+]);
+
+export const errorKey = (e: unknown): string => {
+  const raw = (
+    e instanceof Error
+      ? e.message
+      : typeof e === "string"
+        ? e
+        : typeof e === "object" &&
+            e !== null &&
+            "message" in e &&
+            typeof (e as { message: unknown }).message === "string"
+          ? (e as { message: string }).message
+          : ""
+  ).trim();
+  return KNOWN_ERROR_KEYS.has(raw) ? raw : "error";
+};
 export const useWorkspace = () => usePita((s) => s.w!);

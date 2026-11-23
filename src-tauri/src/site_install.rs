@@ -54,7 +54,7 @@ async fn download(url: Url, limit: usize) -> Result<Vec<u8>, String> {
     read_remote_bytes(response, limit).await
 }
 
-pub async fn inspect(domain: &str, slug: &str) -> Result<Inspection, String> {
+pub async fn inspect(domain: &str, slug: &str, document_only: bool) -> Result<Inspection, String> {
     if !public_domain(domain)
         || slug.is_empty()
         || slug.len() > 160
@@ -79,7 +79,7 @@ pub async fn inspect(domain: &str, slug: &str) -> Result<Inspection, String> {
         };
         saw_index = true;
         if let Some(entry) = index.skills.into_iter().find(|entry| entry.name == slug) {
-            return inspect_entry(url, entry, origin).await;
+            return inspect_entry(url, entry, origin, document_only).await;
         }
     }
     Err(if saw_index {
@@ -94,6 +94,7 @@ async fn inspect_entry(
     index: Url,
     entry: Entry,
     source: SkillSource,
+    document_only: bool,
 ) -> Result<Inspection, String> {
     let files = if let Some(kind) = entry.kind.as_deref() {
         let url = index
@@ -122,7 +123,7 @@ async fn inspect_entry(
             _ => return Err("invalidSkill".into()),
         }
     } else {
-        let paths = entry.files.ok_or("invalidSkill")?;
+        let mut paths = entry.files.ok_or("invalidSkill")?;
         if paths.len() > 200 || !paths.iter().any(|path| path == "SKILL.md") {
             return Err("invalidSkill".into());
         }
@@ -143,6 +144,9 @@ async fn inspect_entry(
             .map_err(|_| "invalidUrl")?
             .pop_if_empty()
             .push(&entry.name);
+        if document_only {
+            paths.retain(|path| path == "SKILL.md");
+        }
         let mut files = Files::new();
         let mut remaining = MAX_TOTAL_SKILL_BYTES as usize;
         for group in paths.chunks(8) {

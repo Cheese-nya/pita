@@ -23,9 +23,11 @@ import {
 import { useSettings } from "../services/settings";
 import { isNativeRuntime } from "../services/pitaClient";
 import { resolveSkillDescription } from "../services/translator";
+import type { SkillSearchMatch } from "../services/skillSearch";
 import { usePita, useWorkspace } from "../store";
 import { AgentIcon, SkillIcon } from "./ui";
 import { targetName } from "./TargetPicker";
+import { SkillSearchContext, SkillSearchText } from "./SkillSearchText";
 
 interface BrushChange {
   id: string;
@@ -47,12 +49,14 @@ export function MatrixView({
   activeSkillId,
   showZh,
   open,
+  searchMatches,
 }: {
   skills: Skill[];
   target?: ScopeTarget;
   activeSkillId?: string;
   showZh: boolean;
   open: (id: string, tab?: string) => void;
+  searchMatches?: ReadonlyMap<string, SkillSearchMatch>;
 }) {
   const { t } = useTranslation();
   const w = useWorkspace();
@@ -267,6 +271,7 @@ export function MatrixView({
           <tbody>
             {skills.map((s) => {
               const descInfo = resolveSkillDescription(s, showZh);
+              const match = searchMatches?.get(s.id);
               const ownerPresets = target
                 ? w.bindings
                     .filter(
@@ -295,7 +300,14 @@ export function MatrixView({
                       >
                         <span className="skill-copy">
                           <span className="skill-head">
-                            <b>{s.name}</b>
+                            <b>
+                              <SkillSearchText
+                                text={s.name}
+                                match={
+                                  match?.field === "name" ? match : undefined
+                                }
+                              />
+                            </b>
                             {ownerPresets.map((p) => (
                               <span className="owner-chip preset" key={p.id}>
                                 <Link2 size={10} aria-hidden="true" />
@@ -303,19 +315,10 @@ export function MatrixView({
                               </span>
                             ))}
                           </span>
-                          {descInfo.display && (
-                            <small
-                              className="skill-desc"
-                              title={descInfo.display}
-                            >
-                              {descInfo.isTranslated && showZh && (
-                                <span className="zh-tag" aria-hidden="true">
-                                  {t("translatedBadge")}
-                                </span>
-                              )}
-                              {descInfo.display}
-                            </small>
-                          )}
+                          <SkillSearchContext
+                            description={descInfo}
+                            match={match}
+                          />
                         </span>
                       </button>
                     </div>
@@ -331,7 +334,8 @@ export function MatrixView({
                     const drifted = !!copy?.drifted;
                     const cellKey = s.id + ":" + a;
                     const isBrushed =
-                      !unavailable && (brushPreview?.keys.has(cellKey) ?? false);
+                      !unavailable &&
+                      (brushPreview?.keys.has(cellKey) ?? false);
                     const visualStatus = isBrushed
                       ? brushPreview!.action === "enable"
                         ? "enabled"

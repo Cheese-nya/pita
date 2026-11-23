@@ -998,6 +998,50 @@ svg.good-tone {
   box-shadow: none;
 }
 
+.library-search {
+  width: clamp(225px, 24vw, 300px);
+}
+
+.library-search-field {
+  flex: 0 0 auto;
+  max-width: 42%;
+  height: 22px;
+  min-height: 0;
+  padding: 0 5px 0 0;
+  border: 0;
+  border-inline-end: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.library-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.library-search-clear {
+  width: 23px;
+  height: 23px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.library-search-clear:hover {
+  background: var(--hover);
+}
+
+.skill-search-match {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  border-radius: 2px;
+}
+
 /* Sort dropdown trigger & popover menu (8px outer, 2px pad -> 6px option) */
 .sort-trigger {
   color: var(--text-2);
@@ -2054,6 +2098,10 @@ svg.good-tone {
   background: var(--scrim-drawer);
 }
 
+.draw-overlay[data-state="closed"] {
+  animation: drawer-scrim-out 180ms ease-in both;
+}
+
 .modal,
 .drawer {
   position: fixed;
@@ -2090,7 +2138,14 @@ svg.good-tone {
   inset: 0 0 0 auto;
   border-width: 0 0 0 1px;
   box-shadow: var(--shadow-drawer);
-  animation: slide 180ms var(--ease-standard);
+}
+
+.drawer[data-state="open"] {
+  animation: drawer-in 230ms var(--ease-standard) both;
+}
+
+.drawer[data-state="closed"] {
+  animation: drawer-out 180ms ease-in both;
 }
 
 .drawer-body {
@@ -2701,14 +2756,30 @@ dd {
   }
 }
 
-@keyframes slide {
+@keyframes drawer-in {
   from {
-    transform: translateX(28px);
-    opacity: 0.3;
+    transform: translateX(100%);
   }
   to {
     transform: translateX(0);
-    opacity: 1;
+  }
+}
+
+@keyframes drawer-out {
+  from {
+    transform: var(--drawer-exit-from, translateX(0));
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes drawer-scrim-out {
+  from {
+    opacity: var(--drawer-scrim-exit-from, 1);
+  }
+  to {
+    opacity: 0;
   }
 }
 
@@ -3474,10 +3545,30 @@ dd {
   flex-wrap: wrap;
   margin-top: auto;
 }
-.market-card-file {
-  margin-inline-start: auto;
+.market-card-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  min-block-size: 4.35em;
+  margin: 0;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.market-card-excerpt.is-loading::before,
+.market-card-excerpt.is-loading::after {
+  content: "";
+  display: block;
+  width: 86%;
+  height: 0.55em;
+  margin: 0.45em 0 0.7em;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+}
+.market-card-excerpt.is-loading::after {
+  width: 62%;
 }
 .market-source-tag {
   min-height: 22px;

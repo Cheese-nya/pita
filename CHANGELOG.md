@@ -2,6 +2,12 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.3.0-beta.3] - 2026-11-23 (Pre-release)
+
+- Marketplace cards show excerpts from `SKILL.md` and load previews as cards enter view.
+- The All Skills search defaults to the skill name. The field selector also offers description, source, and all fields, with matched text highlighted.
+- The right-hand skill detail panel slides in and out, with immediate transitions when reduced motion is enabled.
+
 ## [0.3.0-beta.2] - 2026-11-23 (Pre-release)
 
 ### Skill installation and marketplace

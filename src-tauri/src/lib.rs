@@ -43,6 +43,7 @@ pub fn run() {
             commands::marketplace_preview,
             commands::github_install_fetch,
             commands::inspect_site_skill,
+            commands::site_skill_document,
             commands::translate_google_batch,
             commands::workspace_execute,
             commands::workspace_undo,

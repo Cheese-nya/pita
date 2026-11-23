@@ -22,6 +22,7 @@ import {
 import { GitHubIcon, Head, Modal } from "../components/ui";
 import { Picker } from "../components/FilePicker";
 import { AuditBadge } from "../components/AuditBadge";
+import { MarketCardExcerpt } from "../components/MarketCardExcerpt";
 import { TargetPicker, targetName } from "../components/TargetPicker";
 import { auditSkill } from "../services/audit";
 import {
@@ -881,6 +882,10 @@ export function InstallSkills({
                         )}
                       </button>
                     )}
+                    <MarketCardExcerpt
+                      item={item}
+                      installed={placeholder ? undefined : existing}
+                    />
                     <div className="market-card-foot">
                       <button
                         type="button"
@@ -907,9 +912,6 @@ export function InstallSkills({
                         <span className="badge synced market-installed">
                           {t("installedBadge")}
                         </span>
-                      )}
-                      {canInstallMarketplace(item) && (
-                        <span className="market-card-file mono">SKILL.md</span>
                       )}
                     </div>
                   </article>

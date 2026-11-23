@@ -449,14 +449,14 @@ export class MockPitaClient implements PitaClient {
   }
 
   async appVersion(): Promise<string> {
-    return "0.3.0-beta.2";
+    return "0.3.0-beta.3";
   }
 
   async checkAppUpdate(): Promise<AppUpdateInfo> {
     await delay(200);
     return {
-      current: "0.3.0-beta.2",
-      latest: "v0.3.0-beta.2",
+      current: "0.3.0-beta.3",
+      latest: "v0.3.0-beta.3",
       hasUpdate: false,
       releaseUrl: null,
       error: null,

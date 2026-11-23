@@ -18,6 +18,7 @@ const messages: Record<string, [string, string]> = {
     "Could not refresh the leaderboard. Showing cached results.",
   ],
   marketPreviewLoading: ["正在读取 SKILL.md…", "Loading SKILL.md…"],
+  marketCardPreviewUnavailable: ["暂无正文预览", "Preview unavailable"],
   marketInstalling: ["正在下载并安装…", "Downloading and installing…"],
   marketRepoUnavailable: [
     "暂时无法读取 GitHub 仓库。",
@@ -328,6 +329,13 @@ const messages: Record<string, [string, string]> = {
   byTime: ["最近安装", "Recently installed"],
   byStatus: ["按状态", "Status"],
   search: ["搜索名称、来源或描述…", "Search name, source or description…"],
+  searchSkillInventory: ["搜索当前技能列表", "Search the current skill list"],
+  searchSkillField: ["搜索字段", "Search field"],
+  searchFieldDescription: ["描述", "Description"],
+  searchAllFields: ["全部字段", "All fields"],
+  searchSkillName: ["搜索技能名称…", "Search skill names…"],
+  searchSkillDescription: ["搜索技能描述…", "Search skill descriptions…"],
+  searchSkillSource: ["搜索技能来源…", "Search skill sources…"],
   skillList: ["技能列表", "Skill inventory"],
   results: [
     "显示 {{shown}} / {{total}} 个 Skills",

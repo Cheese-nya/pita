@@ -459,19 +459,58 @@ export function Modal({
 }) {
   const { t } = useTranslation();
   const focus = useRef(document.activeElement as HTMLElement | null);
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const closeAfterExit = useRef(false);
+  const drawerContent = useRef<HTMLDivElement>(null);
+  const drawerScrim = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => () => {
+      closeAfterExit.current = false;
+    },
+    [],
+  );
+
+  function requestClose() {
+    if (!drawer) {
+      close();
+      return;
+    }
+    if (closeAfterExit.current) return;
+    const content = drawerContent.current;
+    const scrim = drawerScrim.current;
+    if (content) {
+      content.style.setProperty(
+        "--drawer-exit-from",
+        getComputedStyle(content).transform,
+      );
+    }
+    if (scrim) {
+      scrim.style.setProperty(
+        "--drawer-scrim-exit-from",
+        getComputedStyle(scrim).opacity,
+      );
+    }
+    closeAfterExit.current = true;
+    setDrawerOpen(false);
+  }
+
   return (
     <Dialog.Root
-      open
+      open={!drawer || drawerOpen}
       onOpenChange={(v) => {
-        if (!v) close();
+        if (!v) requestClose();
       }}
     >
       <Dialog.Portal>
         <Dialog.Overlay
+          ref={drawer ? drawerScrim : undefined}
           className={"overlay " + (drawer ? "draw-overlay" : "")}
         />
         <Dialog.Content
+          ref={drawer ? drawerContent : undefined}
           aria-describedby={undefined}
+          inert={drawer && !drawerOpen ? true : undefined}
           className={
             drawer
               ? "drawer"
@@ -484,13 +523,18 @@ export function Modal({
           onCloseAutoFocus={(e) => {
             e.preventDefault();
             focus.current?.focus();
+            // Radix keeps the content mounted until its exit animation finishes.
+            if (closeAfterExit.current) {
+              closeAfterExit.current = false;
+              close();
+            }
           }}
         >
           <div className="modal-head">
             {leading}
             <Dialog.Title>{title}</Dialog.Title>
             {headActions}
-            <IconButton label={t("close")} onClick={close}>
+            <IconButton label={t("close")} onClick={requestClose}>
               <X size={17} />
             </IconButton>
           </div>

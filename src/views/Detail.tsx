@@ -230,7 +230,12 @@ export function Detail({
     if (!onNavigate || del || removeTarget) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
-      if (document.querySelectorAll("[role=dialog]").length > 1) return;
+      if (
+        !document.querySelector(".drawer[data-state=open]") ||
+        document.querySelectorAll("[role=dialog]").length > 1
+      ) {
+        return;
+      }
       const el = e.target as HTMLElement | null;
       if (
         el &&

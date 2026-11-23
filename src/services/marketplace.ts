@@ -281,6 +281,8 @@ export function canInstallMarketplace(item: MarketplaceItem) {
   return !!item.repoUrl || (!!item.site && "__TAURI_INTERNALS__" in window);
 }
 
+export type MarketplaceDocument = Pick<Skill, "description" | "skillMdPreview">;
+
 export type MarketplacePreview = Pick<
   Skill,
   "name" | "description" | "descriptionZh" | "skillMdPreview"
@@ -295,6 +297,9 @@ const PREVIEW_STORAGE_KEY = "marketplace.previews.v1";
 const previewCache = new Map<string, CachedPreview>();
 const previewRequests = new Map<string, Promise<MarketplacePreview>>();
 let previewCacheLoaded = false;
+const cardPreviewQueue: (() => void)[] = [];
+let activeCardPreviews = 0;
+const siteDocuments = new Map<string, MarketplaceDocument>();
 
 function previewFromSkill(skill: Skill): MarketplacePreview {
   return {
@@ -360,17 +365,23 @@ export async function loadMarketplacePreview(
   if (!canInstallMarketplace(item)) throw Error("marketExternalSource");
   const saved = cachedPreview(item);
   if (saved && Date.now() - saved.at < FEED_FRESH_MS) return saved.result;
+
+  if (item.repoUrl) {
+    try {
+      return await loadMarketplaceSnapshot(item);
+    } catch (error) {
+      if (saved) throw error;
+    }
+  }
+  const result = previewFromSkill(await loadMarketplaceRepo(item, inspectGit));
+  savePreview(item, result);
+  return result;
+}
+
+function loadMarketplaceSnapshot(item: MarketplaceItem) {
   const pending = previewRequests.get(item.key);
   if (pending) return pending;
-
-  const upstream = item.repoUrl
-    ? fetchMarketplacePreview(item)
-    : loadMarketplaceRepo(item, inspectGit).then(previewFromSkill);
-  const request = upstream
-    .catch(async (error: unknown) => {
-      if (saved || !item.repoUrl) throw error;
-      return previewFromSkill(await loadMarketplaceRepo(item, inspectGit));
-    })
+  const request = fetchMarketplacePreview(item)
     .then((result) => {
       savePreview(item, result);
       return result;
@@ -378,6 +389,38 @@ export async function loadMarketplacePreview(
     .finally(() => previewRequests.delete(item.key));
   previewRequests.set(item.key, request);
   return request;
+}
+
+export async function loadMarketplaceCardDocument(
+  item: MarketplaceItem,
+  signal: AbortSignal,
+): Promise<MarketplaceDocument | undefined> {
+  const saved =
+    getCachedMarketplacePreview(item) ?? siteDocuments.get(item.key);
+  if (saved) return saved;
+  if (activeCardPreviews < 4) activeCardPreviews++;
+  else await new Promise<void>((resolve) => cardPreviewQueue.push(resolve));
+  try {
+    if (signal.aborted) return;
+    const current =
+      getCachedMarketplacePreview(item) ?? siteDocuments.get(item.key);
+    if (current) return current;
+    // Cards share the drawer's snapshot request. Only opening the drawer can
+    // fall back to inspecting a whole skill directory.
+    if (item.repoUrl) return await loadMarketplaceSnapshot(item);
+    const result = await invoke<MarketplaceDocument>("site_skill_document", {
+      domain: item.site,
+      slug: item.slug,
+    });
+    if (siteDocuments.size >= 32)
+      siteDocuments.delete(siteDocuments.keys().next().value!);
+    siteDocuments.set(item.key, result);
+    return result;
+  } finally {
+    const next = cardPreviewQueue.shift();
+    if (next) next();
+    else activeCardPreviews--;
+  }
 }
 
 async function fetchMarketplacePreview(

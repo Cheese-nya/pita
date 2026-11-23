@@ -88,7 +88,17 @@ pub async fn github_install_fetch(path: String, raw: bool) -> Result<tauri::ipc:
 
 #[tauri::command]
 pub async fn inspect_site_skill(domain: String, slug: String) -> Result<Inspection, String> {
-    crate::site_install::inspect(&domain, &slug).await
+    crate::site_install::inspect(&domain, &slug, false).await
+}
+
+#[tauri::command]
+pub async fn site_skill_document(domain: String, slug: String) -> Result<serde_json::Value, String> {
+    let inspection = crate::site_install::inspect(&domain, &slug, true).await?;
+    let skill = inspection.skills.first().ok_or("marketSkillMissing")?;
+    Ok(serde_json::json!({
+        "description": skill.description,
+        "skillMdPreview": skill.skill_md_preview,
+    }))
 }
 
 #[tauri::command]

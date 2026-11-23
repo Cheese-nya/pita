@@ -21,6 +21,7 @@ import {
   Gauge,
   FolderOpen,
   ArchiveRestore,
+  X,
 } from "lucide-react";
 import type { ScopeTarget } from "../types/domain";
 import {
@@ -59,11 +60,27 @@ import {
 } from "../components/DeploymentControls";
 import { AgentTokenDock } from "../components/AgentTokenDock";
 import { TranslateSkillsButton } from "../components/TranslateSkillsButton";
+import {
+  SkillSearchContext,
+  SkillSearchText,
+} from "../components/SkillSearchText";
 import { BulkActionBar, BulkPresetModal } from "../components/BulkActions";
 import { MatrixView } from "../components/MatrixView";
 import { DisplayMenu, type GroupMode } from "../components/DisplayMenu";
 import { isNativeRuntime, pitaClient } from "../services/pitaClient";
+import {
+  createSkillSearch,
+  type SkillSearchField,
+  type SkillSearchMatch,
+} from "../services/skillSearch";
 import { useWorkspace, usePita } from "../store";
+
+const searchFields = {
+  name: ["name", "searchSkillName"],
+  description: ["searchFieldDescription", "searchSkillDescription"],
+  source: ["source", "searchSkillSource"],
+  all: ["searchAllFields", "search"],
+} as const;
 
 function states(s: Skill, target?: ScopeTarget) {
   const ds = copies(s, target);
@@ -169,6 +186,7 @@ export const SkillRow = memo(function SkillRow({
   undeployed = false,
   onQuickAdd,
   canQuickAdd = false,
+  match,
 }: {
   agentLimit: number;
   s: Skill;
@@ -183,6 +201,7 @@ export const SkillRow = memo(function SkillRow({
   undeployed?: boolean;
   onQuickAdd?: () => void;
   canQuickAdd?: boolean;
+  match?: SkillSearchMatch;
 }) {
   const { t } = useTranslation(),
     w = useWorkspace(),
@@ -260,7 +279,12 @@ export const SkillRow = memo(function SkillRow({
         <button className="skill-name" onClick={() => open(s.id)}>
           <span className="skill-copy">
             <span className="skill-head">
-              <b>{s.name}</b>
+              <b>
+                <SkillSearchText
+                  text={s.name}
+                  match={match?.field === "name" ? match : undefined}
+                />
+              </b>
               {ownerPresets.map((p) => (
                 <span className="owner-chip preset" key={p.id}>
                   <Link2 size={10} aria-hidden="true" />
@@ -274,23 +298,7 @@ export const SkillRow = memo(function SkillRow({
                 {sourceName(s, t)}
               </span>
             </span>
-            {descInfo.display && (
-              <small
-                className="skill-desc"
-                title={
-                  descInfo.isTranslated && showZh
-                    ? `${descInfo.zh}\n${t("originalDesc")}: ${descInfo.raw}`
-                    : descInfo.display
-                }
-              >
-                {descInfo.isTranslated && showZh && (
-                  <span className="zh-tag" aria-hidden="true">
-                    {t("translatedBadge")}
-                  </span>
-                )}
-                {descInfo.display}
-              </small>
-            )}
+            <SkillSearchContext description={descInfo} match={match} />
           </span>
         </button>
       </div>
@@ -401,6 +409,7 @@ export function Library({
 
   const [filter, setFilter] = useState<keyof ReturnType<typeof states>>("all"),
     [query, search] = useState(""),
+    [searchField, setSearchField] = useState<SkillSearchField>("name"),
     [sort, setSort] = useState<SortKey>(defaultSort),
     [group, setGroup] = useState<GroupMode>("none"),
     [viewMode, setViewMode] = useState<"list" | "matrix">(defaultView),
@@ -483,18 +492,22 @@ export function Library({
     ? w.skills.filter((s) => copies(s, target).length === 0)
     : [];
 
-  const q = query.trim().toLowerCase();
-  const matchesQuery = (s: Skill) =>
-    !q ||
-    [
-      s.name,
-      sourceName(s, t),
-      s.description,
-      resolveSkillDescription(s, true).zh,
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(q);
+  const matches = useMemo(() => {
+    const find = createSkillSearch(query, searchField, showZh);
+    if (!find) return;
+    const result = new Map<string, SkillSearchMatch>();
+    for (const skill of w.skills) {
+      const match = find(skill, sourceName(skill, t));
+      if (match) result.set(skill.id, match);
+    }
+    return result;
+  }, [query, searchField, showZh, t, w.skills]);
+  const searchedScope = matches
+    ? scoped.filter((s) => matches.has(s.id))
+    : scoped;
+  const searchedUndeployed = matches
+    ? undeployedAll.filter((s) => matches.has(s.id))
+    : undeployedAll;
 
   const rank = (s: Skill) => {
     const f = states(s, target);
@@ -507,18 +520,17 @@ export function Library({
         ? Date.parse(b.installedAt) - Date.parse(a.installedAt)
         : sort === "byStatus"
           ? rank(a) - rank(b)
-          : 0) || a.name.localeCompare(b.name);
+          : (matches?.get(a.id)?.rank ?? 0) - (matches?.get(b.id)?.rank ?? 0)) ||
+    a.name.localeCompare(b.name);
 
   const rows = showLibrary
     ? []
-    : scoped
-        .filter((s) => states(s, target)[filter] && matchesQuery(s))
+    : searchedScope
+        .filter((s) => states(s, target)[filter])
         .sort(compareSkills);
 
   const undeployedRows =
-    target && showLibrary
-      ? undeployedAll.filter(matchesQuery).sort(compareSkills)
-      : [];
+    target && showLibrary ? [...searchedUndeployed].sort(compareSkills) : [];
 
   const groups = useMemo(
     () => buildGroups(rows, group, w, target, t),
@@ -831,8 +843,8 @@ export function Library({
                 {t(f)}
                 <span className="filter-count">
                   {f === "all"
-                    ? scoped.length
-                    : scoped.filter((s) => states(s, target)[f]).length}
+                    ? searchedScope.length
+                    : searchedScope.filter((s) => states(s, target)[f]).length}
                 </span>
               </button>
             ))}
@@ -889,23 +901,65 @@ export function Library({
               >
                 {showLibrary ? <Check size={13} /> : <LibraryBig size={13} />}
                 {t("showUndeployed")}
-                <span className="filter-count">{undeployedAll.length}</span>
+                <span className="filter-count">
+                  {searchedUndeployed.length}
+                </span>
               </button>
             )}
           </div>
           <div className="toolbar-right">
-            <label className="search">
-              <Search size={14} />
+            <div
+              className="search library-search"
+              role="search"
+              aria-label={t("searchSkillInventory")}
+            >
+              <Search size={14} aria-hidden="true" />
+              <select
+                className="library-search-field"
+                value={searchField}
+                aria-label={t("searchSkillField")}
+                onChange={(e) =>
+                  setSearchField(e.target.value as SkillSearchField)
+                }
+              >
+                {Object.entries(searchFields).map(([field, [label]]) => (
+                  <option key={field} value={field}>
+                    {t(label)}
+                  </option>
+                ))}
+              </select>
               <input
                 ref={input}
+                type="search"
                 value={query}
                 onChange={(e) => search(e.target.value)}
-                placeholder={t("searchShort")}
-                title={t("search")}
-                aria-label={t("search")}
+                placeholder={t(searchFields[searchField][1])}
+                aria-label={t(searchFields[searchField][1])}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape" || !query || e.nativeEvent.isComposing)
+                    return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  search("");
+                }}
               />
-              <kbd>/</kbd>
-            </label>
+              {query ? (
+                <button
+                  type="button"
+                  className="library-search-clear"
+                  aria-label={t("clearSearch")}
+                  title={t("clearSearch")}
+                  onClick={() => {
+                    search("");
+                    input.current?.focus();
+                  }}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
+              ) : (
+                <kbd>/</kbd>
+              )}
+            </div>
             <button
               type="button"
               className={
@@ -972,6 +1026,7 @@ export function Library({
             activeSkillId={activeSkillId}
             showZh={showZh}
             open={open}
+            searchMatches={matches}
           />
         ) : (
           <div
@@ -1057,6 +1112,7 @@ export function Library({
                         onToggleSelect={toggleSelect}
                         onAddAgent={onAddAgent}
                         onManagePresets={setPresetSkillId}
+                        match={matches?.get(s.id)}
                       />
                     ))}
                 </div>
@@ -1083,6 +1139,7 @@ export function Library({
                     onToggleSelect={toggleSelect}
                     onAddAgent={onAddAgent}
                     undeployed
+                    match={matches?.get(s.id)}
                     canQuickAdd={targetCanQuickAdd}
                     onQuickAdd={() =>
                       run(
@@ -1120,10 +1177,7 @@ export function Library({
                     {t("onboardingInstall")}
                   </button>
                   {onNavigate && (
-                    <button
-                      type="button"
-                      onClick={() => onNavigate("backup")}
-                    >
+                    <button type="button" onClick={() => onNavigate("backup")}>
                       <ArchiveRestore size={14} aria-hidden="true" />
                       {t("onboardingRestore")}
                     </button>
@@ -1148,7 +1202,10 @@ export function Library({
                   )}
                   <button
                     onClick={() => {
-                      if (scoped.length) {
+                      if (matches && (showLibrary || scoped.length)) {
+                        search("");
+                        input.current?.focus();
+                      } else if (scoped.length) {
                         search("");
                         setFilter("all");
                       } else if (target && undeployedAll.length > 0) {
@@ -1159,11 +1216,13 @@ export function Library({
                     }}
                   >
                     {t(
-                      scoped.length
-                        ? "clear"
-                        : target && undeployedAll.length > 0
-                          ? "showUndeployed"
-                          : "installSkill",
+                      matches && (showLibrary || scoped.length)
+                        ? "clearSearch"
+                        : scoped.length
+                          ? "clear"
+                          : target && undeployedAll.length > 0
+                            ? "showUndeployed"
+                            : "installSkill",
                     )}
                   </button>
                 </div>
@@ -1172,7 +1231,7 @@ export function Library({
           </div>
         )}
         <footer className="list-foot">
-          <span>
+          <span role="status">
             {t("results", {
               shown: showLibrary ? undeployedRows.length : rows.length,
               total: showLibrary ? undeployedAll.length : scoped.length,

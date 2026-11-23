@@ -2,6 +2,24 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.2.0] - 2026-11-23
+
+### Live Marketplace & Skill Preview
+- Connected the Install Skills view to the live `skills.sh` leaderboard, search, and pagination (`all-time`, `trending`, `hot`), with GitHub repository archive preview (`SKILL.md` & security audit) in a slide-over drawer and real repository installation.
+- Added one-click replacement of legacy placeholder marketplace copies with upstream repository files and reused GitHub organization/user avatars across library skill icons.
+
+### Agent Navigation & Custom Harness Logos
+- Added the stacked Agent Token Dock beside the All Skills heading with proximity hover expand, dynamic readout spacing (`offsetWidth`-measured), drag-to-reorder, and `…` Agent management entrypoints across the top dock, collapsed sidebar radial wheel, and row deployment ring.
+- Added custom logo icon upload, live preview, replacement, and reset-to-initials for user-defined **Custom Harnesses** (`PNG`, `SVG`, `JPG`, `WebP`, `ICO`, with SVG sanitization and `128×128` transparent PNG normalization), plus `i18next` `nsSeparator: false` support so custom harness display names resolve cleanly everywhere.
+
+### Translation & Token Accounting
+- Replaced stubbed offline wrappers with real Google Translate and custom OpenAI-compatible API translation directly from the skill list (`TranslateSkillsButton`) and Detail drawer without modifying `SKILL.md` hashes (zero Git drift).
+- Switched token estimation to `cl100k_base` (`js-tiktoken`), added full `SKILL.md` token estimates in Ledger details, updated the default per-agent token budget threshold to `20,000`, and scaled token dock bars proportionally.
+
+### Host Detection & Fixes
+- Added native host Agent presence detection (`detect_installed_agents`), hiding `+` install actions and labeling unconfigured built-in agents as **Not installed** while keeping user-defined Custom Harnesses always deployable.
+- Added per-scope copy removal in Skill Details (preserving the central library copy), restored Enable/Disable labels on deployment cards, fixed the Update Center crash when `checkedAt` is empty, added a dedicated **Not installed** scope view, fixed Pi icon contrast across light/dark themes, fixed blurred Settings modal positioning, clarified Settings Agent detection pills, defaulted the sidebar to collapsed with corrected persistence, and added User Guide, Bug Report, GitHub, and Author links.
+
 ## [0.1.0] - 2026-11-22
 
 Initial public release covering **M1 MVP** and **M2 V1.1** milestones across Windows, macOS, and Linux.

@@ -202,7 +202,7 @@ export function Settings({ close }: { close: () => void }) {
   const [hookBusy, setHookBusy] = useState<AgentId | null>(null);
   const [confirmDisableAgent, setConfirmDisableAgent] =
     useState<AgentId | null>(null);
-  const [appVer, setAppVer] = useState("0.1.0");
+  const [appVer, setAppVer] = useState("0.2.0");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [showAddHarness, setShowAddHarness] = useState(false);

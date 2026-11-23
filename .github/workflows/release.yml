@@ -64,9 +64,14 @@ jobs:
             VER=$(node -p "require('./package.json').version")
             TAG="v${VER}"
           fi
+          PRERELEASE_ARGS=()
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --draft \
+              "${PRERELEASE_ARGS[@]}" \
               --title "Pita ${TAG}" \
               --notes-file CHANGELOG.md
           fi
@@ -140,5 +145,5 @@ jobs:
             > - **Windows**: Click "More info" → "Run anyway" in SmartScreen.
             > - **macOS**: Right-click `Pita.app` → "Open", or allow in System Settings → Privacy & Security.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.tauri_args }}

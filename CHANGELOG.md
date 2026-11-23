@@ -2,6 +2,23 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.3.0-beta.1] - 2026-11-23 (Pre-release)
+
+### DeepSeek Harness (`dsh`) Compatibility & Default Agent Ordering
+- Added **DeepSeek Harness (`dsh`)** as a built-in Agent across the desktop backend and UI:
+  - **Discovery & Paths (P0)**: Supports `$DSH_HOME` / `~/.dsh/skills` globally and `.dsh/skills` per project, with official DeepSeek whale branding (`public/agents/dsh.svg`).
+  - **Frontmatter & Skill Lifecycle (P1)**: Added frontmatter validation warnings (`missingFrontmatter`, `invalidFrontmatterName`), `.agents/skills` shadow conflict hints, and flat `<name>.md` skill discovery and toggle/remove lifecycle support alongside directory-based skills.
+  - **Read-Only Usage Telemetry (P2 Route A)**: Added read-only incremental parsing of `~/.dsh/sessions/` `.jsonl` / `.jsonl.zstd` session logs for local Skill invocation accounting (zero edits to DSH config).
+- Updated default top-6 visible Agent ordering to `claude-code`, `codex`, `antigravity`, `dsh`, `workbuddy`, `opencode`, and sorted installed Agents ahead of uninstalled Agents in Agent lists and docks.
+
+### UX, Hooks, Backup, Translation & Marketplace Fixes
+- **UI Layout & Navigation**: Fixed Pi icon optical alignment (`scale(1.12)` inside clean badge), fixed deployment row click propagation vs action buttons, locked the Settings dialog height within `min(700px, 84vh)` across tabs, and prevented hook enable actions on uninstalled Agents.
+- **Usage Hook Precision**: Improved Codex hook detection via `UserPromptSubmit` (`$skill` / `/skill` prompt triggers) and strict skill-name matching against installed library skills.
+- **Sidebar Drag & Drop**: Added folder drop-to-install directly onto global Agents / projects and drag-to-trash confirmation to uninstall copies without deleting the central library entry.
+- **GitHub Backup**: Added one-click GitHub PAT connection (auto repo creation/detection, default `skills-lock.json` / configurable backup path), clearer backup/restore status feedback, and OS Keychain persistence.
+- **Resilient Translation**: Added multi-endpoint Google Translate mirror fallbacks plus custom API timeout handling, error toast reporting, and skill display-name translation alongside descriptions.
+- **Marketplace Filtering**: Added installed status badges/filters and GitHub owner avatar fallback in the Install Skills view.
+
 ## [0.2.0] - 2026-11-23
 
 ### Live Marketplace & Skill Preview

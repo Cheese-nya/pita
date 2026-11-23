@@ -120,7 +120,7 @@ fn extract_codex_skills(val: &serde_json::Value) -> Vec<(String, &'static str)> 
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for raw_tok in prompt.split_whitespace() {
-        let tok = raw_tok.trim_start_matches(|c: char| matches!(c, '(' | '[' | '"' | '\'' | '`'));
+        let tok = raw_tok.trim_start_matches(['(', '[', '"', '\'', '`']);
         let (prefix_trigger, rest) = if let Some(r) = tok.strip_prefix('$') {
             ("explicit-dollar", r)
         } else if let Some(r) = tok.strip_prefix('/') {

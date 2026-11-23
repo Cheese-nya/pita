@@ -414,8 +414,10 @@ pub struct AppUpdateInfo {
     pub error: Option<String>,
 }
 
-fn parse_semver_tuple(v: &str) -> Option<(u64, u64, u64)> {
-    let clean = v.trim().trim_start_matches('v').split('-').next()?;
+fn parse_semver_tuple(v: &str) -> Option<(u64, u64, u64, bool)> {
+    let trimmed = v.trim().trim_start_matches('v');
+    let is_stable = !trimmed.contains('-');
+    let clean = trimmed.split('-').next()?;
     let parts: Vec<&str> = clean.split('.').collect();
     if parts.len() < 3 {
         return None;
@@ -424,6 +426,7 @@ fn parse_semver_tuple(v: &str) -> Option<(u64, u64, u64)> {
         parts[0].parse().ok()?,
         parts[1].parse().ok()?,
         parts[2].parse().ok()?,
+        is_stable,
     ))
 }
 

@@ -2,6 +2,23 @@
 
 All notable changes to **Pita** are documented in this file.
 
+## [0.3.0] - 2026-11-23
+
+Promotes the `v0.3.0-beta.1`–`v0.3.0-beta.4` pre-releases into the stable `v0.3.0` release:
+
+### DeepSeek Harness (`dsh`) & Agent Ordering
+- Added **DeepSeek Harness (`dsh`)** as a built-in Agent (`$DSH_HOME` / `~/.dsh/skills` globally and `.dsh/skills` per project) with DeepSeek branding, flat `<name>.md` discovery and toggle/remove lifecycle, frontmatter & `.agents/skills` conflict warnings, and read-only incremental `~/.dsh/sessions/` invocation telemetry.
+- Updated default top-6 visible Agent ordering (`claude-code`, `codex`, `antigravity`, `dsh`, `workbuddy`, `opencode`) and prioritized installed Agents across docks and lists.
+
+### Marketplace, Skill Installation & Search UX
+- Connected Install Skills cards to viewport-driven `SKILL.md` excerpts, click-anywhere card preview drawer opening (while keeping install and source-filter buttons independent), installed status filters, and local caching across restarts.
+- Added commit-pinned GitHub folder / `skills.sh` / `owner/repo@skill` / website-published (`.well-known/agent-skills`) / `.zip` & `.skill` installation with conflict preservation and rollback on partial deployment failures.
+- Added field-selectable All Skills search (defaulting to skill name, with description, source, and all fields + match highlighting) and sliding detail drawer transitions respecting `prefers-reduced-motion`.
+
+### Translation, Hooks, Backup & UI Polish
+- Added batch Google Translate with per-item fallback and multi-endpoint mirror support alongside custom OpenAI-compatible API translation and skill display-name translation.
+- Improved Codex `UserPromptSubmit` (`$skill` / `/skill`) hook tracking, added one-click GitHub PAT remote backup (`skills-lock.json`) with OS Keychain persistence, sidebar drag-to-install and drag-to-trash, Pi icon alignment, and Settings dialog layout guards.
+
 ## [0.3.0-beta.4] - 2026-11-23 (Pre-release)
 
 - Fixed marketplace skill cards in Install Skills so clicking anywhere on a card (not just the top title header) opens the right-hand preview drawer, while preserving install and source-filter button actions.

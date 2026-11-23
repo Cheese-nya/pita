@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Cheese-nya/pita/releases">Releases (v0.3.0-beta.4)</a> ·
+  <a href="https://github.com/Cheese-nya/pita/releases">Releases (v0.3.0)</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="LICENSE">MIT License</a>
 </p>
@@ -59,7 +59,7 @@
 
 ## 首次运行说明（未签名开源构建 · 零终端）
 
-开源桌面安装包当前未购买商业代码签名证书，可从 [GitHub Releases](https://github.com/Cheese-nya/pita/releases) 下载对应平台最新安装包（当前最新预览版为 **`v0.3.0-beta.4`**）。首次启动如遇系统安全提示，按以下图形步骤一次放行即可，**全程无需打开终端**：
+开源桌面安装包当前未购买商业代码签名证书，可从 [GitHub Releases](https://github.com/Cheese-nya/pita/releases) 下载对应平台最新安装包（当前最新版本为 **`v0.3.0`**）。首次启动如遇系统安全提示，按以下图形步骤一次放行即可，**全程无需打开终端**：
 
 - **Windows（SmartScreen 提示「Windows 已保护你的电脑」）**：
   1. 点击弹窗中的 **「更多信息（More info）」**；
@@ -68,7 +68,7 @@
   1. 在「应用程序」中 **右键点击 `Pita.app` → 选择「打开」**；
   2. 或打开 **系统设置 → 隐私与安全性**，在底部点击 **「仍要打开」** 放行。
 - **Linux**：
-  - Debian / Ubuntu：`sudo apt install ./Pita_0.3.0-beta.4_amd64.deb`（同时自动安装 `/usr/bin/pita` 与 `/usr/bin/pita-hook`）。
+  - Debian / Ubuntu：`sudo apt install ./Pita_0.3.0_amd64.deb`（同时自动安装 `/usr/bin/pita` 与 `/usr/bin/pita-hook`）。
 
 ---
 

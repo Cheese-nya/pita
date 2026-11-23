@@ -17,11 +17,23 @@ pub fn expand_tilde(raw: &str) -> PathBuf {
     PathBuf::from(trimmed)
 }
 
+pub fn resolve_dsh_home() -> PathBuf {
+    resolve_dsh_home_from(std::env::var("DSH_HOME").ok().as_deref())
+}
+
+fn resolve_dsh_home_from(raw: Option<&str>) -> PathBuf {
+    if let Some(val) = raw.map(str::trim).filter(|s| !s.is_empty()) {
+        return expand_tilde(val);
+    }
+    expand_tilde("~/.dsh")
+}
+
 pub fn default_global_paths(agent: &AgentId) -> &'static [&'static str] {
     match agent {
         AgentId::ClaudeCode => &["~/.claude/skills"],
         AgentId::Codex => &["~/.codex/skills", "~/.agents/skills"],
         AgentId::Antigravity => &["~/.gemini/config/skills", "~/.gemini/antigravity/skills"],
+        AgentId::Dsh => &["~/.dsh/skills"],
         AgentId::Qoder => &["~/.qoder/skills"],
         AgentId::Workbuddy => &["~/.workbuddy/skills", "~/.codebuddy/skills"],
         AgentId::T3Code => &["~/.t3code/skills"],
@@ -53,6 +65,7 @@ pub fn agent_is_present(agent: &AgentId, ctx: &RuntimeContext) -> bool {
         AgentId::ClaudeCode => (&["claude"], Some("Claude")),
         AgentId::Codex => (&["codex"], Some("Codex")),
         AgentId::Antigravity => (&["antigravity", "agy"], Some("Antigravity")),
+        AgentId::Dsh => (&["dsh"], Some("DeepSeek Harness")),
         AgentId::Trae => (&["trae", "trae-cn"], Some("Trae")),
         AgentId::Hermes => (&["hermes"], None),
         AgentId::Pi => (&["pi"], None),
@@ -74,6 +87,22 @@ pub fn agent_is_present(agent: &AgentId, ctx: &RuntimeContext) -> bool {
         return true;
     }
     let home = dirs::home_dir();
+    if matches!(agent, AgentId::Dsh) {
+        let dsh_desktop_present = (cfg!(target_os = "macos")
+            && home.iter().any(|dir| {
+                dir.join("Library/Application Support/@deepseek-ai/dsh-desktop")
+                    .is_dir()
+            }))
+            || (cfg!(windows)
+                && std::env::var_os("APPDATA")
+                    .map(PathBuf::from)
+                    .is_some_and(|dir| {
+                        dir.join("@deepseek-ai").join("dsh-desktop").is_dir()
+                    }));
+        if dsh_desktop_present {
+            return true;
+        }
+    }
     let paths = std::env::var_os("PATH").unwrap_or_default();
     if std::env::split_paths(&paths)
         .chain(home.iter().map(|dir| dir.join(".local/bin")))
@@ -125,6 +154,7 @@ pub fn project_dot_dir(agent: &AgentId) -> &'static str {
         AgentId::ClaudeCode => ".claude",
         AgentId::Codex => ".agents",
         AgentId::Antigravity => ".agent",
+        AgentId::Dsh => ".dsh",
         AgentId::Qoder => ".qoder",
         AgentId::Workbuddy => ".workbuddy",
         AgentId::T3Code => ".t3code",
@@ -169,6 +199,7 @@ pub fn agent_from_project_dot_dir(dot: &str) -> Option<AgentId> {
         ".claude" => Some(AgentId::ClaudeCode),
         ".codex" | ".agents" => Some(AgentId::Codex),
         ".agent" => Some(AgentId::Antigravity),
+        ".dsh" => Some(AgentId::Dsh),
         ".qoder" => Some(AgentId::Qoder),
         ".workbuddy" => Some(AgentId::Workbuddy),
         ".t3code" => Some(AgentId::T3Code),
@@ -216,6 +247,9 @@ pub fn global_skill_dirs(agent: &AgentId, ctx: &RuntimeContext) -> Vec<PathBuf> 
         .filter(|s| !s.is_empty())
     {
         return vec![expand_tilde(custom)];
+    }
+    if matches!(agent, AgentId::Dsh) {
+        return vec![resolve_dsh_home().join("skills")];
     }
     if let AgentId::Custom(_) = agent {
         if let Some(h) = ctx.custom_harnesses.iter().find(|h| h.id == *agent) {
@@ -641,5 +675,42 @@ mod tests {
             .custom_paths
             .insert(custom_agent.clone(), missing_custom.to_string_lossy().into());
         assert!(agent_is_present(&custom_agent, &ctx_with_custom_override));
+    }
+
+    #[test]
+    fn dsh_adapter_paths_and_env_resolution() {
+        assert_eq!(default_global_paths(&AgentId::Dsh), &["~/.dsh/skills"]);
+        assert!(!default_global_paths(&AgentId::Dsh)
+            .iter()
+            .any(|p| p.contains(".agents")));
+        assert_eq!(project_dot_dir(&AgentId::Dsh), ".dsh");
+        assert_eq!(agent_from_project_dot_dir(".dsh"), Some(AgentId::Dsh));
+        assert!(!uses_native_disable(
+            &AgentId::Dsh,
+            &ScopeTarget::GlobalAgent {
+                agent_id: AgentId::Dsh,
+            },
+            &[],
+        ));
+
+        assert_eq!(resolve_dsh_home_from(None), expand_tilde("~/.dsh"));
+        assert_eq!(resolve_dsh_home_from(Some("   ")), expand_tilde("~/.dsh"));
+        assert_eq!(
+            resolve_dsh_home_from(Some(" /tmp/custom-dsh ")),
+            PathBuf::from("/tmp/custom-dsh")
+        );
+
+        let ctx = RuntimeContext {
+            enabled_agents: vec![AgentId::Dsh],
+            custom_paths: std::collections::HashMap::from([(
+                AgentId::Dsh,
+                "/tmp/override-dsh-skills".to_string(),
+            )]),
+            custom_harnesses: vec![],
+        };
+        assert_eq!(
+            global_skill_dirs(&AgentId::Dsh, &ctx),
+            vec![PathBuf::from("/tmp/override-dsh-skills")]
+        );
     }
 }

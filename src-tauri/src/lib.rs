@@ -53,6 +53,7 @@ pub fn run() {
             commands::backup_read_remote,
             commands::auth_request_device,
             commands::auth_exchange_device,
+            commands::auth_connect_github_pat,
             commands::open_path,
             commands::open_external_url,
             commands::open_logs_dir,

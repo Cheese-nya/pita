@@ -6,8 +6,8 @@ use crate::tree::{
     normalize_git_url, read_dir_tree,
 };
 use git2::{
-    build::RepoBuilder, Cred, FetchOptions, IndexAddOption, PushOptions, RemoteCallbacks,
-    Repository, ResetType, Signature,
+    build::RepoBuilder, Cred, FetchOptions, IndexAddOption, ProxyOptions, PushOptions,
+    RemoteCallbacks, Repository, ResetType, Signature,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -40,6 +40,50 @@ fn make_callbacks<'a>(token: Option<&'a str>) -> RemoteCallbacks<'a> {
         });
     }
     cb
+}
+
+fn make_proxy_options<'a>() -> ProxyOptions<'a> {
+    let mut proxy = ProxyOptions::new();
+    proxy.auto();
+    proxy
+}
+
+/// Normalizes HTTPS and SSH GitHub repository URLs to `https://github.com/<owner>/<repo>`.
+pub fn normalize_github_repo_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("git@github.com:")
+        .or_else(|| trimmed.strip_prefix("ssh://git@github.com/"))
+    {
+        let parts: Vec<&str> = rest.trim_matches('/').split('/').collect();
+        if parts.len() >= 2 && !parts[0].is_empty() {
+            let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]);
+            if !repo.is_empty() {
+                return Some(format!("https://github.com/{}/{}", parts[0], repo));
+            }
+        }
+        return None;
+    }
+    if let Ok(u) = url::Url::parse(trimmed) {
+        if matches!(u.scheme(), "https" | "http")
+            && u.host_str().is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+        {
+            let segs: Vec<&str> = u
+                .path_segments()
+                .map(|s| s.filter(|x| !x.is_empty()).collect())
+                .unwrap_or_default();
+            if segs.len() >= 2 {
+                let repo = segs[1].strip_suffix(".git").unwrap_or(segs[1]);
+                if !repo.is_empty() {
+                    return Some(format!("https://github.com/{}/{}", segs[0], repo));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn resolve_remote_head_commit(
@@ -102,6 +146,7 @@ fn fetch_or_clone(
                         .map_err(|e| PitaError::Internal(format!("git remote missing: {}", e)))?;
                     let mut fo = FetchOptions::new();
                     fo.remote_callbacks(make_callbacks(token));
+                    fo.proxy_options(make_proxy_options());
                     remote
                         .fetch(
                             &["+refs/heads/*:refs/remotes/origin/*"],
@@ -139,6 +184,7 @@ fn fetch_or_clone(
 fn clone_fresh(url: &str, dir: &Path, token: Option<&str>) -> Result<Repository, PitaError> {
     let mut fo = FetchOptions::new();
     fo.remote_callbacks(make_callbacks(token));
+    fo.proxy_options(make_proxy_options());
     let mut builder = RepoBuilder::new();
     builder.fetch_options(fo);
     builder
@@ -280,18 +326,30 @@ pub fn is_path_git_tracked(project_dir: &Path, target_dir: &Path) -> bool {
         return false;
     };
     let prefix_str = rel_prefix.to_string_lossy().replace('\\', "/");
-    let prefix_slash = if prefix_str.ends_with('/') {
-        prefix_str
-    } else {
-        format!("{}/", prefix_str)
-    };
+    let prefix_trimmed = prefix_str.trim_end_matches('/');
+    let prefix_slash = format!("{}/", prefix_trimmed);
     let Ok(index) = repo.index() else {
         return false;
     };
     index.iter().any(|entry| {
         let p = String::from_utf8_lossy(&entry.path);
-        p.starts_with(&prefix_slash)
+        p == prefix_trimmed || p.starts_with(&prefix_slash)
     })
+}
+
+fn log_backup_push_error(cache_dir: &Path, url: &str, err_msg: &str) {
+    if cache_dir.file_name().is_some_and(|n| n == "cache") {
+        if let Some(root_dir) = cache_dir.parent() {
+            crate::logger::log_error(
+                root_dir,
+                &format!("git push failed for {}: {}", url, err_msg),
+            );
+        }
+    }
+}
+
+fn is_valid_backup_url(value: &str) -> bool {
+    is_valid_https_git_url(value) || (cfg!(test) && Path::new(value).is_dir())
 }
 
 /// Push `pita-workspace.zip` and `skills-lock.json` to the configured HTTPS backup repository.
@@ -302,10 +360,10 @@ pub fn push_remote_backup(
     zip_bytes: &[u8],
     manifest_json: &str,
 ) -> Result<String, PitaError> {
-    if !is_valid_https_git_url(url) {
+    if !is_valid_backup_url(url) {
         return Err(PitaError::InvalidUrl);
     }
-    let dir = cache_dir.join("backup-remote");
+    let dir = repo_cache_dir(cache_dir, url);
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -320,7 +378,10 @@ pub fn push_remote_backup(
             fs::create_dir_all(&dir)?;
             let repo = Repository::init(&dir).map_err(|e| PitaError::Internal(e.to_string()))?;
             let _ = repo.remote("origin", url);
-            (repo, "main".to_string())
+            let branch = "main".to_string();
+            repo.set_head(&format!("refs/heads/{}", branch))
+                .map_err(|e| PitaError::Internal(e.to_string()))?;
+            (repo, branch)
         }
     };
 
@@ -354,6 +415,11 @@ pub fn push_remote_backup(
         .ok()
         .and_then(|h| h.peel_to_commit().ok());
 
+    if parent_commit.is_none() {
+        repo.set_head(&format!("refs/heads/{}", branch))
+            .map_err(|e| PitaError::Internal(e.to_string()))?;
+    }
+
     let commit_oid = match parent_commit.as_ref() {
         Some(parent) => repo
             .commit(
@@ -367,7 +433,7 @@ pub fn push_remote_backup(
             .map_err(|e| PitaError::Internal(e.to_string()))?,
         None => repo
             .commit(
-                Some(&format!("refs/heads/{}", branch)),
+                Some("HEAD"),
                 &sig,
                 &sig,
                 "Pita workspace backup",
@@ -377,15 +443,18 @@ pub fn push_remote_backup(
             .map_err(|e| PitaError::Internal(e.to_string()))?,
     };
 
-    let mut remote = repo
-        .find_remote("origin")
-        .map_err(|e| PitaError::Internal(e.to_string()))?;
+    let mut remote = repo.find_remote("origin").map_err(|e| {
+        log_backup_push_error(cache_dir, url, &e.to_string());
+        PitaError::GitPushFailed
+    })?;
     let mut po = PushOptions::new();
     po.remote_callbacks(make_callbacks(Some(token)));
+    po.proxy_options(make_proxy_options());
     let refspec = format!("HEAD:refs/heads/{}", branch);
-    remote
-        .push(&[&refspec], Some(&mut po))
-        .map_err(|e| PitaError::Internal(format!("git push failed: {}", e)))?;
+    remote.push(&[&refspec], Some(&mut po)).map_err(|e| {
+        log_backup_push_error(cache_dir, url, &e.to_string());
+        PitaError::GitPushFailed
+    })?;
 
     Ok(commit_oid.to_string())
 }
@@ -395,7 +464,7 @@ pub fn pull_remote_backup(
     url: &str,
     token: Option<&str>,
 ) -> Result<Vec<u8>, PitaError> {
-    if !is_valid_https_git_url(url) {
+    if !is_valid_backup_url(url) {
         return Err(PitaError::InvalidUrl);
     }
     let (_repo, dir, _branch, _oid) =
@@ -418,7 +487,7 @@ pub async fn request_github_device_code() -> Result<GitHubDeviceAuth, PitaError>
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .ok_or(PitaError::MissingRemoteToken)?;
+        .ok_or(PitaError::GitHubOAuthNotConfigured)?;
 
     let client = reqwest::Client::new();
     let resp = client
@@ -465,7 +534,7 @@ pub async fn exchange_github_device_token(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .ok_or(PitaError::MissingRemoteToken)?;
+        .ok_or(PitaError::GitHubOAuthNotConfigured)?;
 
     let client = reqwest::Client::new();
     let resp = client
@@ -513,6 +582,156 @@ pub async fn exchange_github_device_token(
     Ok((repo_url, token))
 }
 
+fn is_valid_github_slug(seg: &str) -> bool {
+    !seg.is_empty()
+        && seg != "."
+        && seg != ".."
+        && seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+pub fn resolve_github_pat_target(
+    login: &str,
+    repo: Option<&str>,
+) -> Result<(String, String), PitaError> {
+    let raw = repo.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok((login.to_string(), "pita-backup".to_string()));
+    }
+
+    if raw.starts_with("https://") || raw.starts_with("http://") || raw.starts_with("github.com/") {
+        let with_scheme = if raw.starts_with("github.com/") {
+            format!("https://{}", raw)
+        } else {
+            raw.to_string()
+        };
+        let parsed = url::Url::parse(&with_scheme).map_err(|_| PitaError::InvalidUrl)?;
+        if parsed.scheme() != "https"
+            || !parsed
+                .host_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(PitaError::InvalidUrl);
+        }
+        let segs: Vec<&str> = parsed
+            .path_segments()
+            .map(|s| s.filter(|x| !x.is_empty()).collect())
+            .unwrap_or_default();
+        if segs.len() != 2 {
+            return Err(PitaError::InvalidUrl);
+        }
+        let owner = segs[0];
+        let repo_name = segs[1].strip_suffix(".git").unwrap_or(segs[1]);
+        if !is_valid_github_slug(owner) || !is_valid_github_slug(repo_name) {
+            return Err(PitaError::InvalidUrl);
+        }
+        return Ok((owner.to_string(), repo_name.to_string()));
+    }
+
+    let cleaned = raw.trim_matches('/');
+    let parts: Vec<&str> = cleaned.split('/').collect();
+    match parts.as_slice() {
+        [single] => {
+            let repo_name = single.strip_suffix(".git").unwrap_or(single);
+            if !is_valid_github_slug(repo_name) {
+                return Err(PitaError::InvalidUrl);
+            }
+            Ok((login.to_string(), repo_name.to_string()))
+        }
+        [owner, repo_part] => {
+            let repo_name = repo_part.strip_suffix(".git").unwrap_or(repo_part);
+            if !is_valid_github_slug(owner) || !is_valid_github_slug(repo_name) {
+                return Err(PitaError::InvalidUrl);
+            }
+            Ok((owner.to_string(), repo_name.to_string()))
+        }
+        _ => Err(PitaError::InvalidUrl),
+    }
+}
+
+pub async fn connect_github_pat(
+    token: &str,
+    repo: Option<&str>,
+) -> Result<(String, String), PitaError> {
+    let trimmed_token = token.trim();
+    if trimmed_token.is_empty() {
+        return Err(PitaError::GitHubAuthFailed);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| PitaError::Internal(e.to_string()))?;
+    let user_agent = format!("Pita/{}", env!("CARGO_PKG_VERSION"));
+
+    let user_resp = client
+        .get("https://api.github.com/user")
+        .header("User-Agent", &user_agent)
+        .header("Accept", "application/vnd.github+json")
+        .header("Authorization", format!("Bearer {}", trimmed_token))
+        .send()
+        .await
+        .map_err(|_| PitaError::GitHubAuthFailed)?;
+    if !user_resp.status().is_success() {
+        return Err(PitaError::GitHubAuthFailed);
+    }
+    let user_json: serde_json::Value = user_resp
+        .json()
+        .await
+        .map_err(|_| PitaError::GitHubAuthFailed)?;
+    let login = user_json
+        .get("login")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(PitaError::GitHubAuthFailed)?
+        .to_string();
+
+    let (owner, repo_name) = resolve_github_pat_target(&login, repo)?;
+    let check_url = format!("https://api.github.com/repos/{}/{}", owner, repo_name);
+    let repo_resp = client
+        .get(&check_url)
+        .header("User-Agent", &user_agent)
+        .header("Accept", "application/vnd.github+json")
+        .header("Authorization", format!("Bearer {}", trimmed_token))
+        .send()
+        .await
+        .map_err(|_| PitaError::GitHubAuthFailed)?;
+
+    if repo_resp.status().as_u16() == 404 {
+        if !owner.eq_ignore_ascii_case(&login) {
+            return Err(PitaError::GitHubAuthFailed);
+        }
+        let create_resp = client
+            .post("https://api.github.com/user/repos")
+            .header("User-Agent", &user_agent)
+            .header("Accept", "application/vnd.github+json")
+            .header("Authorization", format!("Bearer {}", trimmed_token))
+            .json(&serde_json::json!({
+                "name": repo_name,
+                "private": true,
+                "auto_init": false,
+                "description": "Pita skills backup"
+            }))
+            .send()
+            .await
+            .map_err(|_| PitaError::GitHubAuthFailed)?;
+        if !create_resp.status().is_success() {
+            return Err(PitaError::GitHubAuthFailed);
+        }
+    } else if !repo_resp.status().is_success() {
+        return Err(PitaError::GitHubAuthFailed);
+    }
+
+    Ok((
+        format!("https://github.com/{}/{}", owner, repo_name),
+        trimmed_token.to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +755,126 @@ mod tests {
 
         assert!(is_path_git_tracked(tmp.path(), &tracked_skill));
         assert!(!is_path_git_tracked(tmp.path(), &untracked_skill));
+    }
+
+    #[test]
+    fn resolves_github_pat_target_variants() {
+        assert_eq!(
+            resolve_github_pat_target("alice", None).unwrap(),
+            ("alice".into(), "pita-backup".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("  ")).unwrap(),
+            ("alice".into(), "pita-backup".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("skills-sync")).unwrap(),
+            ("alice".into(), "skills-sync".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("my-org/skills-sync.git")).unwrap(),
+            ("my-org".into(), "skills-sync".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("https://github.com/my-org/skills-sync.git"))
+                .unwrap(),
+            ("my-org".into(), "skills-sync".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("github.com/alice/my-vault/")).unwrap(),
+            ("alice".into(), "my-vault".into())
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("https://gitlab.com/alice/my-vault"))
+                .unwrap_err()
+                .code(),
+            "invalidUrl"
+        );
+        assert_eq!(
+            resolve_github_pat_target("alice", Some("a/b/c"))
+                .unwrap_err()
+                .code(),
+            "invalidUrl"
+        );
+    }
+
+    #[test]
+    fn push_remote_backup_handles_empty_bare_repo_and_uses_repo_cache_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare_dir = tmp.path().join("empty-remote.git");
+        Repository::init_bare(&bare_dir).unwrap();
+
+        let root_a = tmp.path().join("pita-a");
+        let cache_a = root_a.join("cache");
+        fs::create_dir_all(&cache_a).unwrap();
+        let remote_url = bare_dir.to_string_lossy().to_string();
+
+        let commit = push_remote_backup(
+            &cache_a,
+            &remote_url,
+            "ghp_testtoken",
+            b"ZIPBYTES",
+            "{\"version\":1}",
+        )
+        .unwrap();
+        assert!(!commit.is_empty());
+        assert!(repo_cache_dir(&cache_a, &remote_url).join(".git").is_dir());
+        assert!(!cache_a.join("backup-remote").exists());
+
+        // Second push on same repo cache dir succeeds cleanly
+        let commit2 = push_remote_backup(
+            &cache_a,
+            &remote_url,
+            "ghp_testtoken",
+            b"ZIPBYTES-V2",
+            "{\"version\":1}",
+        )
+        .unwrap();
+        assert_ne!(commit, commit2);
+
+        // Machine B pulls from bare repo
+        let cache_b = tmp.path().join("pita-b/cache");
+        fs::create_dir_all(&cache_b).unwrap();
+        let pulled = pull_remote_backup(&cache_b, &remote_url, Some("ghp_testtoken")).unwrap();
+        assert_eq!(pulled, b"ZIPBYTES-V2");
+    }
+
+    #[test]
+    fn push_remote_backup_failure_returns_git_push_failed_and_logs_redacted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let non_bare_dir = tmp.path().join("not-a-bare-repo");
+        // Initializing a non-bare repo (without bare config) rejects push to checked-out main branch!
+        let remote_repo = Repository::init(&non_bare_dir).unwrap();
+        let sig = Signature::now("Test", "t@local").unwrap();
+        let tree_oid = remote_repo.index().unwrap().write_tree().unwrap();
+        let tree = remote_repo.find_tree(tree_oid).unwrap();
+        remote_repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        remote_repo.set_head("refs/heads/main").unwrap();
+
+        let root_dir = tmp.path().join("pita-root");
+        let cache_dir = root_dir.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let url = non_bare_dir.to_string_lossy().to_string();
+
+        let err = push_remote_backup(&cache_dir, &url, "ghp_secret", b"ZIP", "{}").unwrap_err();
+        assert_eq!(err.code(), "gitPushFailed");
+        let log_txt = fs::read_to_string(root_dir.join("logs/pita.log")).unwrap();
+        assert!(log_txt.contains("git push failed"));
+    }
+
+    #[tokio::test]
+    async fn github_device_auth_without_client_id_returns_oauth_not_configured() {
+        if std::env::var("PITA_GITHUB_CLIENT_ID")
+            .ok()
+            .is_some_and(|v| !v.trim().is_empty())
+        {
+            return;
+        }
+        let err = request_github_device_code().await.err().unwrap();
+        assert_eq!(err.code(), "githubOAuthNotConfigured");
+        let err2 = exchange_github_device_token("dummy").await.err().unwrap();
+        assert_eq!(err2.code(), "githubOAuthNotConfigured");
     }
 }

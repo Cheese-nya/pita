@@ -10,7 +10,8 @@ use crate::domain::{
 };
 use crate::engine::WorkspaceEngine;
 use crate::git_ops::{
-    exchange_github_device_token, inspect_git_repo, pull_remote_backup, request_github_device_code,
+    connect_github_pat, exchange_github_device_token, inspect_git_repo, pull_remote_backup,
+    request_github_device_code,
 };
 use crate::hooks::{disable_agent_hook, enable_agent_hook, read_usage_summary, UsageSummary};
 use crate::logger::{log_error, logs_dir};
@@ -69,6 +70,8 @@ pub async fn marketplace_feed(
         .map_err(|_| "marketUnavailable".into())
 }
 
+const TRANSLATE_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 #[tauri::command]
 pub async fn translate_description(text: String) -> Result<serde_json::Value, String> {
     if text.trim().is_empty() || text.chars().count() > 4_000 {
@@ -78,23 +81,35 @@ pub async fn translate_description(text: String) -> Result<serde_json::Value, St
         .timeout(std::time::Duration::from_secs(12))
         .build()
         .map_err(|_| "translationUnavailable")?;
-    client
-        .get("https://translate.googleapis.com/translate_a/single")
-        .query(&[
-            ("client", "gtx"),
-            ("sl", "auto"),
-            ("tl", "zh-CN"),
-            ("dt", "t"),
-            ("q", &text),
-        ])
-        .send()
-        .await
-        .map_err(|_| "translationUnavailable")?
-        .error_for_status()
-        .map_err(|_| "translationUnavailable")?
-        .json()
-        .await
-        .map_err(|_| "translationUnavailable".into())
+
+    for endpoint in [
+        "https://translate.googleapis.com/translate_a/single",
+        "https://translate.google.com/translate_a/single",
+    ] {
+        let Ok(resp) = client
+            .get(endpoint)
+            .header("User-Agent", TRANSLATE_USER_AGENT)
+            .query(&[
+                ("client", "gtx"),
+                ("sl", "auto"),
+                ("tl", "zh-CN"),
+                ("dt", "t"),
+                ("q", text.as_str()),
+            ])
+            .send()
+            .await
+        else {
+            continue;
+        };
+        let Ok(ok_resp) = resp.error_for_status() else {
+            continue;
+        };
+        if let Ok(json) = ok_resp.json::<serde_json::Value>().await {
+            return Ok(json);
+        }
+    }
+
+    Err("translationUnavailable".into())
 }
 
 pub struct AppState {
@@ -337,10 +352,21 @@ pub async fn auth_exchange_device(device_code: String) -> Result<DeviceExchangeR
 }
 
 #[tauri::command]
+pub async fn auth_connect_github_pat(
+    token: String,
+    repo: Option<String>,
+) -> Result<DeviceExchangeResponse, String> {
+    let (url, token) = connect_github_pat(&token, repo.as_deref())
+        .await
+        .map_err(map_err)?;
+    Ok(DeviceExchangeResponse { url, token })
+}
+
+#[tauri::command]
 pub async fn open_path(app: AppHandle, path: String) -> Result<String, String> {
     let target: PathBuf = expand_tilde(&path);
     if !target.exists() {
-        std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        return Err(PitaError::PathMissing.code());
     }
     let path_str = target.to_string_lossy().to_string();
     app.opener()

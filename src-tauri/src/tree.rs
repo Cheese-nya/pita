@@ -220,6 +220,61 @@ pub fn discover_skill_dirs(base_dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Reads a single flat `<name>.md` skill file up to `MAX_FILE_BYTES` into a `"SKILL.md"` tree.
+pub fn read_flat_md_skill(path: &Path) -> Result<Files, PitaError> {
+    use std::io::Read;
+    if !path.is_file() {
+        return Err(PitaError::Missing);
+    }
+    let meta = fs::metadata(path)?;
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(PitaError::InvalidSkill);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(PitaError::InvalidSkill);
+    }
+    let mut files = Files::new();
+    files.insert("SKILL.md".to_string(), encode_bytes(&bytes));
+    Ok(files)
+}
+
+/// Discovers top-level `<name>.md` flat skill files (regular files or symlinks to files)
+/// directly inside `base_dir`, skipping hidden `.` files and files without valid SKILL.md frontmatter.
+pub fn discover_flat_md_skills(base_dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if !base_dir.is_dir() {
+        return found;
+    }
+    let Ok(rd) = fs::read_dir(base_dir) else {
+        return found;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || should_skip_entry(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let is_md = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if !is_md || !path.is_file() {
+            continue;
+        }
+        if let Ok(files) = read_flat_md_skill(&path) {
+            if parse_skill_meta(&files).is_ok() {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// Atomically writes a skill file tree to `dest` via a sibling temp directory.
 pub fn write_dir_tree_atomic(dest: &Path, files: &Files) -> Result<(), PitaError> {
     let parent = dest
@@ -620,5 +675,63 @@ mod tests {
             Some("https://gitlab.com/org/repo")
         );
         assert_eq!(normalize_git_url("not a valid url"), None);
+    }
+
+    #[test]
+    fn discovers_flat_md_skills_and_skips_dot_system_and_hidden_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        fs::create_dir_all(skills_dir.join(".system/internal-skill")).unwrap();
+        fs::write(
+            skills_dir.join(".system/internal-skill/SKILL.md"),
+            "---\nname: internal-skill\ndescription: Must be skipped.\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(skills_dir.join("dir-skill")).unwrap();
+        fs::write(
+            skills_dir.join("dir-skill/SKILL.md"),
+            "---\nname: dir-skill\ndescription: Dir skill.\n---\n",
+        )
+        .unwrap();
+
+        let flat_ok = skills_dir.join("flat-one.md");
+        fs::write(
+            &flat_ok,
+            "---\nname: flat-one\ndescription: Flat skill.\n---\nBody\n",
+        )
+        .unwrap();
+        fs::write(
+            skills_dir.join(".hidden.md"),
+            "---\nname: hidden\ndescription: Hidden.\n---\n",
+        )
+        .unwrap();
+        fs::write(skills_dir.join("README.md"), "# Not a skill\n").unwrap();
+
+        #[cfg(unix)]
+        {
+            let ext_md = dir.path().join("ext-flat.md");
+            fs::write(
+                &ext_md,
+                "---\nname: ext-flat\ndescription: Symlinked flat skill.\n---\n",
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(&ext_md, skills_dir.join("ext-flat.md")).unwrap();
+        }
+
+        let dirs = discover_skill_dirs(&skills_dir);
+        assert_eq!(dirs, vec![skills_dir.join("dir-skill")]);
+
+        let flats = discover_flat_md_skills(&skills_dir);
+        assert!(flats.contains(&flat_ok));
+        assert!(!flats.iter().any(|p| p.ends_with(".hidden.md")));
+        assert!(!flats.iter().any(|p| p.ends_with("README.md")));
+        #[cfg(unix)]
+        assert!(flats.contains(&skills_dir.join("ext-flat.md")));
+
+        let files = read_flat_md_skill(&flat_ok).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files.contains_key("SKILL.md"));
+        let meta = parse_skill_meta(&files).unwrap();
+        assert_eq!(meta.name, "flat-one");
     }
 }

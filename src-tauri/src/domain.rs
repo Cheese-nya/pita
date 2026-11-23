@@ -34,6 +34,18 @@ pub enum PitaError {
     InvalidAgentConfig,
     #[error("missingRemoteToken")]
     MissingRemoteToken,
+    #[error("agentNotInstalled")]
+    AgentNotInstalled,
+    #[error("githubAuthFailed")]
+    GitHubAuthFailed,
+    #[error("githubOAuthNotConfigured")]
+    GitHubOAuthNotConfigured,
+    #[error("gitPushFailed")]
+    GitPushFailed,
+    #[error("hookBinaryMissing")]
+    HookBinaryMissing,
+    #[error("pathMissing")]
+    PathMissing,
     #[error("error: {0}")]
     Internal(String),
 }
@@ -55,6 +67,12 @@ impl PitaError {
             PitaError::Missing => "missing".into(),
             PitaError::InvalidAgentConfig => "invalidAgentConfig".into(),
             PitaError::MissingRemoteToken => "missingRemoteToken".into(),
+            PitaError::AgentNotInstalled => "agentNotInstalled".into(),
+            PitaError::GitHubAuthFailed => "githubAuthFailed".into(),
+            PitaError::GitHubOAuthNotConfigured => "githubOAuthNotConfigured".into(),
+            PitaError::GitPushFailed => "gitPushFailed".into(),
+            PitaError::HookBinaryMissing => "hookBinaryMissing".into(),
+            PitaError::PathMissing => "pathMissing".into(),
             PitaError::Internal(msg) => msg.clone(),
         }
     }
@@ -83,6 +101,7 @@ pub enum AgentId {
     ClaudeCode,
     Codex,
     Antigravity,
+    Dsh,
     Qoder,
     Workbuddy,
     T3Code,
@@ -105,19 +124,20 @@ impl AgentId {
             AgentId::ClaudeCode,
             AgentId::Codex,
             AgentId::Antigravity,
-            AgentId::Qoder,
+            AgentId::Dsh,
             AgentId::Workbuddy,
-            AgentId::T3Code,
-            AgentId::GeminiCli,
             AgentId::Opencode,
-            AgentId::Windsurf,
-            AgentId::CodexCli,
-            AgentId::ClaudeCli,
-            AgentId::AntigravityCli,
             AgentId::Trae,
             AgentId::Hermes,
             AgentId::Pi,
             AgentId::OpenClaw,
+            AgentId::Qoder,
+            AgentId::T3Code,
+            AgentId::GeminiCli,
+            AgentId::Windsurf,
+            AgentId::CodexCli,
+            AgentId::ClaudeCli,
+            AgentId::AntigravityCli,
         ]
     }
 
@@ -126,6 +146,7 @@ impl AgentId {
             AgentId::ClaudeCode => "claude-code",
             AgentId::Codex => "codex",
             AgentId::Antigravity => "antigravity",
+            AgentId::Dsh => "dsh",
             AgentId::Qoder => "qoder",
             AgentId::Workbuddy => "workbuddy",
             AgentId::T3Code => "t3-code",
@@ -153,6 +174,7 @@ impl AgentId {
             "claude-code" => Ok(AgentId::ClaudeCode),
             "codex" => Ok(AgentId::Codex),
             "antigravity" => Ok(AgentId::Antigravity),
+            "dsh" => Ok(AgentId::Dsh),
             "qoder" => Ok(AgentId::Qoder),
             "workbuddy" => Ok(AgentId::Workbuddy),
             "t3-code" => Ok(AgentId::T3Code),
@@ -611,4 +633,49 @@ pub enum Command {
     Backup,
     #[serde(rename = "root")]
     Root { path: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_builtin_order_and_dsh_id_and_error_codes() {
+        let all = AgentId::builtin_all();
+        let ids: Vec<&str> = all.iter().map(|a| a.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "claude-code",
+                "codex",
+                "antigravity",
+                "dsh",
+                "workbuddy",
+                "opencode",
+                "trae",
+                "hermes",
+                "pi",
+                "openclaw",
+                "qoder",
+                "t3-code",
+                "gemini-cli",
+                "windsurf",
+                "codex-cli",
+                "claude-cli",
+                "antigravity-cli",
+            ]
+        );
+        assert_eq!(AgentId::parse_id("dsh").unwrap(), AgentId::Dsh);
+        assert_eq!(AgentId::Dsh.as_str(), "dsh");
+
+        assert_eq!(PitaError::AgentNotInstalled.code(), "agentNotInstalled");
+        assert_eq!(PitaError::GitHubAuthFailed.code(), "githubAuthFailed");
+        assert_eq!(
+            PitaError::GitHubOAuthNotConfigured.code(),
+            "githubOAuthNotConfigured"
+        );
+        assert_eq!(PitaError::GitPushFailed.code(), "gitPushFailed");
+        assert_eq!(PitaError::HookBinaryMissing.code(), "hookBinaryMissing");
+        assert_eq!(PitaError::PathMissing.code(), "pathMissing");
+    }
 }

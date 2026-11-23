@@ -37,13 +37,14 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 walkdir = "2"
 dirs = "5"
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 url = "2"
 similar = "2"
+zstd = "0.13"
 
 [target.'cfg(not(windows))'.dependencies]
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }

@@ -10,11 +10,14 @@ use crate::domain::{
     RemoteConfig, RuntimeContext, ScopeTarget, Skill, SkillEvent, SkillSource, Snapshot,
     Workspace,
 };
-use crate::git_ops::{check_skill_upstream, is_path_git_tracked, push_remote_backup};
+use crate::git_ops::{
+    check_skill_upstream, is_path_git_tracked, normalize_github_repo_url, push_remote_backup,
+};
 use crate::secrets::{delete_remote_token, get_remote_token, set_remote_token};
 use crate::tree::{
-    discover_skill_dirs, hash_tree, is_valid_https_git_url, make_skill, normalize_skill_id,
-    parse_skill_meta, read_dir_tree, remove_path_safe, write_dir_tree_atomic,
+    discover_flat_md_skills, discover_skill_dirs, hash_tree, is_valid_https_git_url, make_skill,
+    normalize_skill_id, parse_skill_meta, read_dir_tree, read_flat_md_skill, remove_path_safe,
+    write_dir_tree_atomic,
 };
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -47,6 +50,199 @@ fn preset_name_taken(ws: &Workspace, name: &str, ignore_id: &str) -> bool {
 
 fn skill_available_for_update(s: &Skill) -> bool {
     s.has_update && !s.pinned && matches!(s.source, SkillSource::Git { .. })
+}
+
+fn normalize_lock_skill_path(raw: &str) -> String {
+    let clean = raw.trim().replace('\\', "/");
+    let clean = clean.trim_matches('/');
+    if clean.is_empty() || clean.eq_ignore_ascii_case("SKILL.md") {
+        ".".to_string()
+    } else if let Some(dir) = clean
+        .strip_suffix("/SKILL.md")
+        .or_else(|| clean.strip_suffix("/skill.md"))
+    {
+        let dir = dir.trim_matches('/');
+        if dir.is_empty() {
+            ".".to_string()
+        } else {
+            dir.to_string()
+        }
+    } else {
+        clean.to_string()
+    }
+}
+
+pub fn load_agents_skill_lock() -> HashMap<String, (String, String, String)> {
+    load_agents_skill_lock_from(&expand_tilde("~/.agents/.skill-lock.json"))
+}
+
+fn load_agents_skill_lock_from(path: &Path) -> HashMap<String, (String, String, String)> {
+    let mut out = HashMap::new();
+    let Ok(raw) = fs::read_to_string(path) else {
+        return out;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return out;
+    };
+    let Some(skills) = val.get("skills").and_then(|v| v.as_object()) else {
+        return out;
+    };
+    for (id, entry) in skills {
+        let repo_url = entry
+            .get("sourceUrl")
+            .and_then(|v| v.as_str())
+            .and_then(normalize_github_repo_url)
+            .or_else(|| {
+                let st = entry
+                    .get("sourceType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let src = entry.get("source").and_then(|v| v.as_str())?;
+                if st.eq_ignore_ascii_case("github") && src.contains('/') && !src.contains(':') {
+                    normalize_github_repo_url(&format!("https://github.com/{}", src))
+                } else {
+                    None
+                }
+            });
+        let Some(repo_url) = repo_url else {
+            continue;
+        };
+        let skill_path = entry
+            .get("skillPath")
+            .and_then(|v| v.as_str())
+            .map(normalize_lock_skill_path)
+            .unwrap_or_else(|| ".".to_string());
+        let folder_hash = entry
+            .get("skillFolderHash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let tuple = (repo_url, skill_path, folder_hash);
+        out.insert(id.clone(), tuple.clone());
+        let norm_id = normalize_skill_id(id);
+        if !norm_id.is_empty() {
+            out.entry(norm_id).or_insert(tuple);
+        }
+    }
+    out
+}
+
+fn infer_git_source(
+    skill_id: &str,
+    skill_path: &Path,
+    skill_lock: &HashMap<String, (String, String, String)>,
+) -> Option<SkillSource> {
+    if let Some((repo_url, lock_skill_path, hash)) = skill_lock.get(skill_id).or_else(|| {
+        skill_path
+            .file_stem()
+            .or_else(|| skill_path.file_name())
+            .and_then(|n| n.to_str())
+            .and_then(|n| {
+                skill_lock
+                    .get(n)
+                    .or_else(|| skill_lock.get(&normalize_skill_id(n)))
+            })
+    }) {
+        return Some(SkillSource::Git {
+            repo_url: repo_url.clone(),
+            git_ref: "main".to_string(),
+            commit: hash.clone(),
+            skill_path: lock_skill_path.clone(),
+        });
+    }
+
+    let canon = fs::canonicalize(skill_path).ok()?;
+    let discover_target = if canon.is_file() {
+        canon.parent()?
+    } else {
+        canon.as_path()
+    };
+    let repo = git2::Repository::discover(discover_target).ok()?;
+    let remote = repo.find_remote("origin").ok()?;
+    let repo_url = normalize_github_repo_url(remote.url()?)?;
+    let rel_skill_path = repo
+        .workdir()
+        .and_then(|wd| fs::canonicalize(wd).ok())
+        .and_then(|wd| canon.strip_prefix(&wd).ok().map(|p| p.to_path_buf()))
+        .map(|rel| {
+            let s = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            if s.is_empty() {
+                ".".to_string()
+            } else {
+                s
+            }
+        })
+        .unwrap_or_else(|| ".".to_string());
+    let (git_ref, commit) = match repo.head() {
+        Ok(head) => {
+            let branch = head.shorthand().unwrap_or("main").to_string();
+            let oid = head
+                .peel_to_commit()
+                .map(|c| c.id().to_string())
+                .unwrap_or_default();
+            (branch, oid)
+        }
+        Err(_) => ("main".to_string(), String::new()),
+    };
+
+    Some(SkillSource::Git {
+        repo_url,
+        git_ref,
+        commit,
+        skill_path: rel_skill_path,
+    })
+}
+
+fn find_matching_dsh_flat_md(base_dir: &Path, skill_id: &str) -> Vec<PathBuf> {
+    let mut matches = Vec::new();
+    if !base_dir.is_dir() {
+        return matches;
+    }
+    let Ok(rd) = fs::read_dir(base_dir) else {
+        return matches;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let is_md = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if !is_md {
+            continue;
+        }
+        let is_file_or_symlink = fs::symlink_metadata(&path).is_ok_and(|m| {
+            m.is_file() || (m.file_type().is_symlink() && !path.is_dir())
+        });
+        if !is_file_or_symlink {
+            continue;
+        }
+        let stem_matches = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| stem == skill_id || normalize_skill_id(stem) == skill_id);
+        let parsed_id = read_flat_md_skill(&path)
+            .ok()
+            .and_then(|files| parse_skill_meta(&files).ok())
+            .map(|meta| normalize_skill_id(&meta.name));
+        let is_match = match parsed_id {
+            Some(ref actual_id) => actual_id == skill_id,
+            None => stem_matches,
+        };
+        if is_match {
+            matches.push(path);
+        }
+    }
+    matches.sort();
+    matches
 }
 
 pub struct WorkspaceEngine {
@@ -342,10 +538,18 @@ impl WorkspaceEngine {
         let active_dir = target_base.join(&skill.id);
         let staged_dir = staging_skill_dir(root_dir, &d.scope, &d.agent_id, &skill.id);
         let files_to_write = d.files.as_ref().unwrap_or(&skill.files);
+        let flat_matches = if matches!(d.agent_id, AgentId::Dsh) {
+            find_matching_dsh_flat_md(&target_base, &skill.id)
+        } else {
+            Vec::new()
+        };
 
         match d.status {
             crate::domain::DeploymentStatus::Enabled => {
                 write_dir_tree_atomic(&active_dir, files_to_write)?;
+                for flat_path in flat_matches {
+                    let _ = remove_path_safe(&flat_path);
+                }
                 if staged_dir.exists() {
                     let _ = fs::remove_dir_all(&staged_dir);
                 }
@@ -387,6 +591,18 @@ impl WorkspaceEngine {
                         write_dir_tree_atomic(&staged_dir, files_to_write)?;
                     }
                     let _ = remove_path_safe(&active_dir);
+                    for flat_path in flat_matches {
+                        let _ = remove_path_safe(&flat_path);
+                    }
+                } else if let Some(first_flat) = flat_matches.first() {
+                    if let Ok(flat_files) = read_flat_md_skill(first_flat) {
+                        write_dir_tree_atomic(&staged_dir, &flat_files)?;
+                    } else {
+                        write_dir_tree_atomic(&staged_dir, files_to_write)?;
+                    }
+                    for flat_path in flat_matches {
+                        let _ = remove_path_safe(&flat_path);
+                    }
                 } else {
                     write_dir_tree_atomic(&staged_dir, files_to_write)?;
                 }
@@ -406,6 +622,11 @@ impl WorkspaceEngine {
         if let Ok(target_base) = target_skills_dir(scope, agent_id, projects, ctx) {
             let active_dir = target_base.join(skill_id);
             let _ = remove_path_safe(&active_dir);
+            if matches!(agent_id, AgentId::Dsh) {
+                for flat_path in find_matching_dsh_flat_md(&target_base, skill_id) {
+                    let _ = remove_path_safe(&flat_path);
+                }
+            }
             if uses_native_disable(agent_id, scope, projects) {
                 match agent_id {
                     AgentId::ClaudeCode => {
@@ -444,6 +665,11 @@ impl WorkspaceEngine {
             let Ok(real_base) = fs::canonicalize(&base) else {
                 continue;
             };
+            if matches!(agent, AgentId::Dsh) {
+                for flat_path in find_matching_dsh_flat_md(&base, id) {
+                    remove_path_safe(&flat_path)?;
+                }
+            }
             for dir in discover_skill_dirs(&base) {
                 if dir != base
                     && !dir
@@ -545,6 +771,7 @@ impl WorkspaceEngine {
         ctx: &RuntimeContext,
         only_project_id: Option<&str>,
     ) -> Result<(), PitaError> {
+        let skill_lock = load_agents_skill_lock();
         let mut discovered: Vec<(ScopeTarget, AgentId, PathBuf, bool)> = Vec::new();
 
         // 1. Global agent directories (unless scoped to a single project)
@@ -567,6 +794,11 @@ impl WorkspaceEngine {
                 for dir in global_skill_dirs(&agent, ctx) {
                     for p in discover_skill_dirs(&dir) {
                         discovered.push((scope.clone(), agent.clone(), p, false));
+                    }
+                    if matches!(agent, AgentId::Dsh) {
+                        for p in discover_flat_md_skills(&dir) {
+                            discovered.push((scope.clone(), agent.clone(), p, false));
+                        }
                     }
                 }
                 let staged_parent = root_dir
@@ -596,6 +828,11 @@ impl WorkspaceEngine {
                     for p in discover_skill_dirs(&dir) {
                         discovered.push((scope.clone(), agent.clone(), p, false));
                     }
+                    if matches!(agent, AgentId::Dsh) {
+                        for p in discover_flat_md_skills(&dir) {
+                            discovered.push((scope.clone(), agent.clone(), p, false));
+                        }
+                    }
                 }
                 let staged_parent = root_dir
                     .join("staging")
@@ -608,11 +845,19 @@ impl WorkspaceEngine {
             }
         }
 
-        // 3. Reconcile discovered directories into Workspace
+        // 3. Reconcile discovered directories (and DSH flat .md files) into Workspace
         let mut seen_deployments: HashSet<(String, String, AgentId)> = HashSet::new();
         for (scope, agent, skill_dir, is_staged) in discovered {
-            let Ok(disk_files) = read_dir_tree(&skill_dir) else {
-                continue;
+            let disk_files = if skill_dir.is_file() {
+                let Ok(f) = read_flat_md_skill(&skill_dir) else {
+                    continue;
+                };
+                f
+            } else {
+                let Ok(f) = read_dir_tree(&skill_dir) else {
+                    continue;
+                };
+                f
             };
             let Ok(meta) = parse_skill_meta(&disk_files) else {
                 continue;
@@ -656,6 +901,14 @@ impl WorkspaceEngine {
             };
 
             if let Some(existing_skill) = ws.skills.iter_mut().find(|s| s.id == skill_id) {
+                if matches!(
+                    existing_skill.source,
+                    SkillSource::Local { .. } | SkillSource::Unknown
+                ) {
+                    if let Some(git_src) = infer_git_source(&skill_id, &skill_dir, &skill_lock) {
+                        existing_skill.source = git_src;
+                    }
+                }
                 let drifted = disk_hash != existing_skill.central_hash;
                 if let Some(dep) = existing_skill
                     .deployments
@@ -680,29 +933,31 @@ impl WorkspaceEngine {
                         files: if drifted { Some(disk_files) } else { None },
                     });
                 }
-            } else if let Ok(mut new_skill) = make_skill(
-                disk_files,
-                SkillSource::Local {
-                    origin_path: Some(skill_dir.to_string_lossy().to_string()),
-                },
-                None,
-            ) {
-                Self::write_central(root_dir, &new_skill)?;
-                if status == crate::domain::DeploymentStatus::Enabled {
-                    new_skill.enabled_since = Some(now_iso());
+            } else {
+                let inferred_source =
+                    infer_git_source(&skill_id, &skill_dir, &skill_lock).unwrap_or(
+                        SkillSource::Local {
+                            origin_path: Some(skill_dir.to_string_lossy().to_string()),
+                        },
+                    );
+                if let Ok(mut new_skill) = make_skill(disk_files, inferred_source, None) {
+                    Self::write_central(root_dir, &new_skill)?;
+                    if status == crate::domain::DeploymentStatus::Enabled {
+                        new_skill.enabled_since = Some(now_iso());
+                    }
+                    new_skill.deployments.push(CopyDeployment {
+                        scope,
+                        agent_id: agent,
+                        status,
+                        installed_hash: disk_hash,
+                        drifted: false,
+                        git_tracked_in_project: git_tracked,
+                        manual: true,
+                        paused_by_project: None,
+                        files: None,
+                    });
+                    ws.skills.push(new_skill);
                 }
-                new_skill.deployments.push(CopyDeployment {
-                    scope,
-                    agent_id: agent,
-                    status,
-                    installed_hash: disk_hash,
-                    drifted: false,
-                    git_tracked_in_project: git_tracked,
-                    manual: true,
-                    paused_by_project: None,
-                    files: None,
-                });
-                ws.skills.push(new_skill);
             }
         }
 
@@ -723,16 +978,33 @@ impl WorkspaceEngine {
                     continue;
                 }
                 // Check primary target path & staging path directly
-                let active_exists = target_skills_dir(&d.scope, &d.agent_id, &projects_snapshot, ctx)
-                    .ok()
+                let target_base =
+                    target_skills_dir(&d.scope, &d.agent_id, &projects_snapshot, ctx).ok();
+                let active_exists = target_base
+                    .as_ref()
                     .map(|base| base.join(&s.id))
                     .filter(|p| p.is_dir() && p.join("SKILL.md").is_file());
                 let staged_exists =
                     Some(staging_skill_dir(root_dir, &d.scope, &d.agent_id, &s.id))
                         .filter(|p| p.is_dir() && p.join("SKILL.md").is_file());
+                let flat_exists = if matches!(d.agent_id, AgentId::Dsh) {
+                    target_base
+                        .as_ref()
+                        .and_then(|base| find_matching_dsh_flat_md(base, &s.id).into_iter().next())
+                } else {
+                    None
+                };
 
                 if let Some(dir) = active_exists.or(staged_exists) {
                     if let Ok(disk_files) = read_dir_tree(&dir) {
+                        let disk_hash = hash_tree(&disk_files);
+                        d.installed_hash = disk_hash.clone();
+                        d.drifted = disk_hash != s.central_hash;
+                        d.files = if d.drifted { Some(disk_files) } else { None };
+                    }
+                    keep.push(d);
+                } else if let Some(flat_file) = flat_exists {
+                    if let Ok(disk_files) = read_flat_md_skill(&flat_file) {
                         let disk_hash = hash_tree(&disk_files);
                         d.installed_hash = disk_hash.clone();
                         d.drifted = disk_hash != s.central_hash;
@@ -752,6 +1024,22 @@ impl WorkspaceEngine {
     // Core Command Execution (All 32 Command Variants)
     // -------------------------------------------------------------------------
 
+    fn should_skip_uninstalled_global(
+        target: &ScopeTarget,
+        agent: &AgentId,
+        s: &Skill,
+        ctx: &RuntimeContext,
+    ) -> bool {
+        matches!(target, ScopeTarget::GlobalAgent { .. })
+            && !matches!(agent, AgentId::Custom(_))
+            && !ctx.custom_paths.contains_key(agent)
+            && !s
+                .deployments
+                .iter()
+                .any(|d| d.scope == *target && d.agent_id == *agent)
+            && !crate::adapters::agent_is_present(agent, ctx)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn deploy_one(
         root_dir: &Path,
@@ -763,6 +1051,10 @@ impl WorkspaceEngine {
         manual: bool,
         enable: bool,
     ) -> Result<(), PitaError> {
+        if Self::should_skip_uninstalled_global(target, &agent, s, ctx) {
+            return Err(PitaError::AgentNotInstalled);
+        }
+
         if let Some(existing) = s
             .deployments
             .iter_mut()
@@ -817,13 +1109,15 @@ impl WorkspaceEngine {
         for d in &mut s.deployments {
             // Live-disk drift guard (#256): ALWAYS re-hash the actual copy on disk before
             // overwriting, so unscanned user edits or added templates are NEVER destroyed!
+            let live_base = match d.status {
+                crate::domain::DeploymentStatus::DisabledStaging => None,
+                _ => target_skills_dir(&d.scope, &d.agent_id, projects, ctx).ok(),
+            };
             let live_dir = match d.status {
                 crate::domain::DeploymentStatus::DisabledStaging => {
                     Some(staging_skill_dir(root_dir, &d.scope, &d.agent_id, &s.id))
                 }
-                _ => target_skills_dir(&d.scope, &d.agent_id, projects, ctx)
-                    .ok()
-                    .map(|base| base.join(&s.id)),
+                _ => live_base.as_ref().map(|base| base.join(&s.id)),
             };
             if let Some(dir) = live_dir.filter(|p| p.is_dir() && p.join("SKILL.md").is_file()) {
                 if let Ok(live_files) = read_dir_tree(&dir) {
@@ -833,6 +1127,21 @@ impl WorkspaceEngine {
                         d.drifted = true;
                         d.files = Some(live_files);
                         continue;
+                    }
+                }
+            } else if matches!(d.agent_id, AgentId::Dsh) {
+                if let Some(flat_file) = live_base
+                    .as_ref()
+                    .and_then(|base| find_matching_dsh_flat_md(base, &s.id).into_iter().next())
+                {
+                    if let Ok(live_files) = read_flat_md_skill(&flat_file) {
+                        let live_hash = hash_tree(&live_files);
+                        if live_hash != previous && live_hash != sha {
+                            d.installed_hash = live_hash;
+                            d.drifted = true;
+                            d.files = Some(live_files);
+                            continue;
+                        }
                     }
                 }
             }
@@ -879,6 +1188,9 @@ impl WorkspaceEngine {
         for s in &mut ws.skills {
             if new_ids.contains(&s.id) && !old_applied.contains(&s.id) {
                 for a in &agents {
+                    if Self::should_skip_uninstalled_global(&target, a, s, ctx) {
+                        continue;
+                    }
                     Self::deploy_one(root_dir, &projects, ctx, s, &target, a.clone(), false, true)?;
                 }
             }
@@ -1045,6 +1357,9 @@ impl WorkspaceEngine {
                         let s = &mut ws.skills[s_idx];
                         if action == "enable" {
                             for a in &target_agents {
+                                if Self::should_skip_uninstalled_global(target, a, s, ctx) {
+                                    continue;
+                                }
                                 Self::deploy_one(
                                     root_dir,
                                     &projects_snapshot,
@@ -1122,6 +1437,9 @@ impl WorkspaceEngine {
                             continue;
                         }
                         let s = &mut ws.skills[s_idx];
+                        if Self::should_skip_uninstalled_global(&ch.target, &ch.agent, s, ctx) {
+                            continue;
+                        }
                         Self::deploy_one(
                             root_dir,
                             &projects_snapshot,
@@ -1842,6 +2160,9 @@ impl WorkspaceEngine {
                     for t in &targets {
                         for a in scope_agents(ws, t) {
                             let s = &mut ws.skills[s_idx];
+                            if Self::should_skip_uninstalled_global(t, &a, s, ctx) {
+                                continue;
+                            }
                             let already_enabled = s.deployments.iter().any(|d| {
                                 d.scope == *t
                                     && d.agent_id == a
@@ -3115,5 +3436,303 @@ mod tests {
             .find(|d| d.agent_id == custom_id)
             .unwrap();
         assert_eq!(dep.status, DeploymentStatus::DisabledStaging);
+    }
+
+    #[test]
+    fn dsh_flat_md_discovery_staging_reenable_and_remove_without_duplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pita_root = tmp.path().join("pita-root");
+        let dsh_skills = tmp.path().join("dsh-skills");
+        fs::create_dir_all(&dsh_skills).unwrap();
+        fs::create_dir_all(dsh_skills.join(".system/builtin")).unwrap();
+        fs::write(
+            dsh_skills.join(".system/builtin/SKILL.md"),
+            "---\nname: builtin\ndescription: System.\n---\n",
+        )
+        .unwrap();
+        // Flat file whose filename differs from normalized frontmatter name
+        let flat_path = dsh_skills.join("alias-name.md");
+        fs::write(
+            &flat_path,
+            "---\nname: flat-dsh-skill\ndescription: Flat DSH skill.\n---\n# Flat Body\n",
+        )
+        .unwrap();
+
+        let ctx = RuntimeContext {
+            enabled_agents: vec![AgentId::Dsh],
+            custom_paths: HashMap::from([(AgentId::Dsh, dsh_skills.to_string_lossy().into())]),
+            custom_harnesses: vec![],
+        };
+        let engine = WorkspaceEngine::open_in_dir(pita_root.clone()).unwrap();
+        let ws = engine.load(&ctx).unwrap();
+        assert_eq!(ws.skills.len(), 1);
+        assert_eq!(ws.skills[0].id, "flat-dsh-skill");
+        assert_eq!(ws.skills[0].deployments[0].agent_id, AgentId::Dsh);
+        assert_eq!(
+            ws.skills[0].deployments[0].status,
+            DeploymentStatus::Enabled
+        );
+
+        let target = ScopeTarget::GlobalAgent {
+            agent_id: AgentId::Dsh,
+        };
+        // Disable -> moves to staging AND removes flat .md so DSH won't keep loading it!
+        let ws = engine
+            .execute(
+                Command::Deploy {
+                    id: "flat-dsh-skill".into(),
+                    target: target.clone(),
+                    agent: AgentId::Dsh,
+                    action: "disable".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert!(!flat_path.exists());
+        assert!(pita_root
+            .join("staging/global/dsh/flat-dsh-skill/SKILL.md")
+            .is_file());
+        assert_eq!(
+            ws.skills[0].deployments[0].status,
+            DeploymentStatus::DisabledStaging
+        );
+
+        // Re-enable -> materializes as <skill_id>/SKILL.md without leaving flat .md
+        let ws = engine
+            .execute(
+                Command::Deploy {
+                    id: "flat-dsh-skill".into(),
+                    target: target.clone(),
+                    agent: AgentId::Dsh,
+                    action: "enable".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert!(dsh_skills.join("flat-dsh-skill/SKILL.md").is_file());
+        assert!(!flat_path.exists());
+        assert_eq!(
+            ws.skills[0].deployments[0].status,
+            DeploymentStatus::Enabled
+        );
+
+        // If a ghost flat file exists alongside dir, remove cleans up both
+        fs::write(
+            dsh_skills.join("flat-dsh-skill.md"),
+            "---\nname: flat-dsh-skill\ndescription: Ghost.\n---\n",
+        )
+        .unwrap();
+        engine
+            .execute(
+                Command::Deploy {
+                    id: "flat-dsh-skill".into(),
+                    target,
+                    agent: AgentId::Dsh,
+                    action: "remove".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert!(!dsh_skills.join("flat-dsh-skill").exists());
+        assert!(!dsh_skills.join("flat-dsh-skill.md").exists());
+    }
+
+    #[test]
+    fn uninstalled_builtin_global_agent_is_blocked_on_single_deploy_and_skipped_on_bulk_and_add() {
+        let base_ctx = RuntimeContext::default();
+        let Some(uninstalled) = AgentId::builtin_all()
+            .into_iter()
+            .find(|a| !crate::adapters::agent_is_present(a, &base_ctx))
+        else {
+            return;
+        };
+        let uninstalled_dirs = global_skill_dirs(&uninstalled, &base_ctx);
+        let tmp = tempfile::tempdir().unwrap();
+        let pita_root = tmp.path().join("pita-root");
+        let ag_dir = tmp.path().join("ag-skills");
+        let ctx = RuntimeContext {
+            enabled_agents: vec![AgentId::Antigravity, uninstalled.clone()],
+            custom_paths: HashMap::from([(AgentId::Antigravity, ag_dir.to_string_lossy().into())]),
+            custom_harnesses: vec![],
+        };
+        let engine = WorkspaceEngine::open_in_dir(pita_root).unwrap();
+        engine.load(&ctx).unwrap();
+
+        let uninstalled_target = ScopeTarget::GlobalAgent {
+            agent_id: uninstalled.clone(),
+        };
+        let ag_target = ScopeTarget::GlobalAgent {
+            agent_id: AgentId::Antigravity,
+        };
+
+        // Command::Add skips uninstalled global target cleanly while deploying to custom-path target
+        let ws = engine
+            .execute(
+                Command::Add {
+                    skills: vec![sample_skill("guard-test", "body")],
+                    targets: vec![ag_target.clone(), uninstalled_target.clone()],
+                    reuse: None,
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(ws.skills[0].deployments.len(), 1);
+        assert_eq!(ws.skills[0].deployments[0].agent_id, AgentId::Antigravity);
+        for d in &uninstalled_dirs {
+            assert!(!d.exists());
+        }
+
+        // Single Command::Deploy returns Err(AgentNotInstalled)
+        let err = engine
+            .execute(
+                Command::Deploy {
+                    id: "guard-test".into(),
+                    target: uninstalled_target.clone(),
+                    agent: uninstalled.clone(),
+                    action: "enable".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), "agentNotInstalled");
+
+        // BulkDeploy & MatrixDeploy skip uninstalled global target cleanly
+        let ws = engine
+            .execute(
+                Command::BulkDeploy {
+                    ids: vec!["guard-test".into()],
+                    targets: vec![uninstalled_target.clone()],
+                    action: "enable".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(ws.skills[0].deployments.len(), 1);
+
+        let ws = engine
+            .execute(
+                Command::MatrixDeploy {
+                    changes: vec![crate::domain::MatrixChange {
+                        id: "guard-test".into(),
+                        target: uninstalled_target.clone(),
+                        agent: uninstalled.clone(),
+                    }],
+                    action: "enable".into(),
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(ws.skills[0].deployments.len(), 1);
+
+        // Preset CreatePreset/Bind also skips uninstalled built-in global target cleanly
+        let ws = engine
+            .execute(
+                Command::CreatePreset {
+                    name: "GuardPreset".into(),
+                    ids: vec!["guard-test".into()],
+                    targets: vec![uninstalled_target.clone()],
+                },
+                &ctx,
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(ws.skills[0].deployments.len(), 1);
+        for d in &uninstalled_dirs {
+            assert!(!d.exists());
+        }
+    }
+
+    #[test]
+    fn infers_github_source_from_skill_lock_and_git_repo_not_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lock_path = tmp.path().join(".skill-lock.json");
+        fs::write(
+            &lock_path,
+            r#"{
+  "version": 3,
+  "skills": {
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/skills.git",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "skillFolderHash": "76a98a285cb0434f3d39e1a873823556330e398b"
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let lock = load_agents_skill_lock_from(&lock_path);
+        assert_eq!(
+            lock.get("find-skills"),
+            Some(&(
+                "https://github.com/vercel-labs/skills".to_string(),
+                "skills/find-skills".to_string(),
+                "76a98a285cb0434f3d39e1a873823556330e398b".to_string(),
+            ))
+        );
+
+        let src_lock = infer_git_source("find-skills", &tmp.path().join("find-skills"), &lock);
+        assert_eq!(
+            src_lock,
+            Some(SkillSource::Git {
+                repo_url: "https://github.com/vercel-labs/skills".into(),
+                git_ref: "main".into(),
+                commit: "76a98a285cb0434f3d39e1a873823556330e398b".into(),
+                skill_path: "skills/find-skills".into(),
+            })
+        );
+
+        // Git repository discovery with SSH remote URL normalized to HTTPS
+        let repo_dir = tmp.path().join("cloned-repo");
+        let skill_subdir = repo_dir.join("skills/my-tool");
+        fs::create_dir_all(&skill_subdir).unwrap();
+        fs::write(
+            skill_subdir.join("SKILL.md"),
+            "---\nname: my-tool\ndescription: Repo tool.\nrepository: https://github.com/fake/from-frontmatter\n---\n",
+        )
+        .unwrap();
+        let repo = git2::Repository::init(&repo_dir).unwrap();
+        repo.remote("origin", "git@github.com:acme/cool-skills.git")
+            .unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new("skills/my-tool/SKILL.md")).unwrap();
+        idx.write().unwrap();
+        let tree_oid = idx.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("Test", "test@local").unwrap();
+        let oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+
+        let empty_lock = HashMap::new();
+        let git_src = infer_git_source("my-tool", &skill_subdir, &empty_lock);
+        assert_eq!(
+            git_src,
+            Some(SkillSource::Git {
+                repo_url: "https://github.com/acme/cool-skills".into(),
+                git_ref: "main".into(),
+                commit: oid.to_string(),
+                skill_path: "skills/my-tool".into(),
+            })
+        );
+
+        // Plain directory with frontmatter URL only -> NOT converted into fake SkillSource::Git
+        let plain_dir = tmp.path().join("plain-skill");
+        fs::create_dir_all(&plain_dir).unwrap();
+        fs::write(
+            plain_dir.join("SKILL.md"),
+            "---\nname: plain-skill\ndescription: Plain.\nrepository: https://github.com/fake/from-frontmatter\n---\n",
+        )
+        .unwrap();
+        assert_eq!(infer_git_source("plain-skill", &plain_dir, &empty_lock), None);
     }
 }

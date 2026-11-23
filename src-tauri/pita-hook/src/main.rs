@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -108,25 +109,39 @@ fn extract_slash_skill(val: &serde_json::Value) -> Option<String> {
     Some(name)
 }
 
-fn extract_codex_dollar_skills(val: &serde_json::Value) -> Vec<String> {
+fn extract_codex_skills(val: &serde_json::Value) -> Vec<(String, &'static str)> {
     let prompt = val
         .get("prompt")
+        .or_else(|| val.get("user_prompt"))
         .or_else(|| val.get("input"))
         .or_else(|| val.get("message"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for tok in prompt.split_whitespace() {
-        if let Some(rest) = tok.strip_prefix('$') {
-            let clean = rest
-                .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
-            let name = normalize_name(clean);
-            if !name.is_empty()
-                && name.chars().next().is_some_and(|c| c.is_alphabetic())
-                && !out.contains(&name)
-            {
-                out.push(name);
+    for raw_tok in prompt.split_whitespace() {
+        let tok = raw_tok.trim_start_matches(|c: char| matches!(c, '(' | '[' | '"' | '\'' | '`'));
+        let (prefix_trigger, rest) = if let Some(r) = tok.strip_prefix('$') {
+            ("explicit-dollar", r)
+        } else if let Some(r) = tok.strip_prefix('/') {
+            if r.contains('/') {
+                continue;
             }
+            ("slash", r.split(':').next_back().unwrap_or(r))
+        } else {
+            continue;
+        };
+        let clean =
+            rest.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        let name = normalize_name(clean);
+        if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_alphabetic()) {
+            continue;
+        }
+        if prefix_trigger == "slash" && BUILTIN_SLASH_COMMANDS.contains(&name.as_str()) {
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            out.push((name, prefix_trigger));
         }
     }
     out
@@ -221,12 +236,12 @@ fn main() {
             }
         }
         ("codex", _) => {
-            for skill in extract_codex_dollar_skills(&val) {
+            for (skill, trigger) in extract_codex_skills(&val) {
                 events.push(UsageEvent {
                     at: now.clone(),
                     agent: agent.clone(),
                     skill,
-                    trigger: "explicit-dollar".into(),
+                    trigger: trigger.into(),
                 });
             }
         }
@@ -242,7 +257,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_claude_skill_tool_and_slash_and_codex_dollar() {
+    fn parses_claude_skill_tool_and_slash_and_codex_dollar_and_slash() {
         let tool_val = serde_json::json!({
             "tool_name": "Skill",
             "tool_input": { "skill": "code-review" }
@@ -261,10 +276,26 @@ mod tests {
         let builtin_val = serde_json::json!({ "prompt": "/compact please" });
         assert_eq!(extract_slash_skill(&builtin_val), None);
 
-        let codex_val = serde_json::json!({ "prompt": "Please run $api-design and $tdd here." });
+        let codex_val = serde_json::json!({
+            "prompt": "Please run $api-design, /tdd, and $tdd plus /compact and /usr/bin/env here."
+        });
         assert_eq!(
-            extract_codex_dollar_skills(&codex_val),
-            vec!["api-design".to_string(), "tdd".to_string()]
+            extract_codex_skills(&codex_val),
+            vec![
+                ("api-design".to_string(), "explicit-dollar"),
+                ("tdd".to_string(), "slash"),
+            ]
+        );
+
+        let codex_user_prompt = serde_json::json!({
+            "user_prompt": "/frontend-design and $find-skills."
+        });
+        assert_eq!(
+            extract_codex_skills(&codex_user_prompt),
+            vec![
+                ("frontend-design".to_string(), "slash"),
+                ("find-skills".to_string(), "explicit-dollar"),
+            ]
         );
     }
 }

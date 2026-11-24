@@ -181,6 +181,9 @@ npm run tauri:build
 ```
 
 ---
+## Community
+
+[Linux Do](linux.do)
 
 ## 开源协议
 

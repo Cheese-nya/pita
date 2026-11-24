@@ -184,6 +184,9 @@ npm run tauri:build
 
 ---
 
+## Community
+
+[Linux Do](linux.do)
 ## License
 
 Released under the [MIT License](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for release history.
